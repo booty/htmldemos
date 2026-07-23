@@ -13,6 +13,20 @@ final class GPUSharedLayoutTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<InteractionForce>.stride, 48)
     }
 
+    func testGPUUniformFieldOffsetsMatchMetalABI() {
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.gridSize), 0)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.deltaAndTime), 16)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.forces), 32)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.turbulence), 48)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.emitterPositionRadius), 64)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.emitterDirectionSpeed), 80)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.particleCounts), 96)
+
+        XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.positionRadius), 0)
+        XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.directionStrength), 16)
+        XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.modeAndPadding), 32)
+    }
+
     func testGPUUniformsPackValidatedSimulationInputs() {
         var parameters = SimulationParameters.default
         parameters.fluidGridAxis = .n64

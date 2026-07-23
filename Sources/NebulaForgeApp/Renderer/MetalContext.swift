@@ -6,6 +6,7 @@ enum RendererError: LocalizedError, Equatable {
     case missingShaderResource(String)
     case shaderCompilation(String)
     case pipeline(String)
+    case commandEncoding(String)
 
     var errorDescription: String? {
         switch self {
@@ -17,6 +18,8 @@ enum RendererError: LocalizedError, Equatable {
             "Metal shader compilation failed: \(message)"
         case .pipeline(let stage):
             "Metal pipeline creation failed for \(stage)."
+        case .commandEncoding(let stage):
+            "Metal command encoding failed for \(stage)."
         }
     }
 }

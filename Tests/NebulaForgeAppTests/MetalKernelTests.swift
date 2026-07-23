@@ -30,6 +30,138 @@ final class MetalKernelTests: XCTestCase {
         XCTAssertLessThan(after, before * 0.35)
         XCTAssertTrue(after.isFinite)
     }
+
+    func testAllocationFailurePreservesCompleteExistingResourceSet() throws {
+        let context = try MetalContext()
+        let gate = TextureAllocationGate(device: context.device)
+        let solver = try FluidSolver(
+            context: context,
+            gridAxis: 8,
+            storageMode: .shared,
+            textureFactory: gate.makeTexture
+        )
+        let originalVelocity = solver.velocityTexture
+        let originalPressure = solver.pressureTexture
+        let originalState = solver.stepState
+
+        gate.successesBeforeFailure = 2
+
+        XCTAssertThrowsError(try solver.resizeIfNeeded(gridAxis: 9))
+        XCTAssertTrue(originalVelocity === solver.velocityTexture)
+        XCTAssertTrue(originalPressure === solver.pressureTexture)
+        XCTAssertEqual(solver.gridAxis, 8)
+        XCTAssertEqual(solver.stepState, originalState)
+    }
+
+    func testEncoderFailureDoesNotPublishPendingPingPongState() throws {
+        let context = try MetalContext()
+        let gate = EncoderCreationGate(successesBeforeFailure: 5)
+        let solver = try FluidSolver(
+            context: context,
+            gridAxis: 8,
+            storageMode: .shared,
+            encoderFactory: gate.makeEncoder
+        )
+        let initialState = solver.stepState
+        let commandBuffer = try XCTUnwrap(context.queue.makeCommandBuffer())
+
+        XCTAssertThrowsError(
+            try solver.encodeStep(
+                commandBuffer: commandBuffer,
+                uniforms: quiescentUniforms(gridAxis: 8),
+                force: .inactive
+            )
+        ) { error in
+            guard case RendererError.commandEncoding = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+        XCTAssertEqual(solver.stepState, initialState)
+    }
+
+    func testRepeatedAsymmetricBoundaryStepsStayFiniteAndProjected() throws {
+        let context = try MetalContext()
+        let solver = try FluidSolver(
+            context: context,
+            gridAxis: 8,
+            storageMode: .shared
+        )
+        let harness = try MetalTestHarness(context: context, gridAxis: 8)
+        harness.seedAsymmetricBoundaryVelocity(texture: solver.velocityTexture)
+        let before = try harness.maximumAbsoluteDivergence(texture: solver.velocityTexture)
+        let uniforms = quiescentUniforms(gridAxis: 8)
+
+        for _ in 0..<16 {
+            let commandBuffer = try XCTUnwrap(context.queue.makeCommandBuffer())
+            try solver.encodeStep(
+                commandBuffer: commandBuffer,
+                uniforms: uniforms,
+                force: .inactive
+            )
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+            XCTAssertEqual(commandBuffer.status, .completed)
+            XCTAssertTrue(harness.allValuesAreFinite(texture: solver.velocityTexture, components: 4))
+            XCTAssertTrue(harness.allValuesAreFinite(texture: solver.pressureTexture, components: 1))
+        }
+
+        let after = try harness.maximumAbsoluteDivergence(texture: solver.velocityTexture)
+        XCTAssertLessThan(after, before * 0.6)
+        XCTAssertLessThan(harness.maximumAbsoluteValue(texture: solver.pressureTexture, components: 1), 64)
+    }
+}
+
+private final class TextureAllocationGate {
+    let device: MTLDevice
+    var successesBeforeFailure: Int?
+
+    init(device: MTLDevice) {
+        self.device = device
+    }
+
+    func makeTexture(descriptor: MTLTextureDescriptor) -> MTLTexture? {
+        if let remaining = successesBeforeFailure {
+            guard remaining > 0 else { return nil }
+            successesBeforeFailure = remaining - 1
+        }
+        return device.makeTexture(descriptor: descriptor)
+    }
+}
+
+private final class EncoderCreationGate {
+    var successesBeforeFailure: Int
+
+    init(successesBeforeFailure: Int) {
+        self.successesBeforeFailure = successesBeforeFailure
+    }
+
+    func makeEncoder(commandBuffer: MTLCommandBuffer) -> MTLComputeCommandEncoder? {
+        guard successesBeforeFailure > 0 else { return nil }
+        successesBeforeFailure -= 1
+        return commandBuffer.makeComputeCommandEncoder()
+    }
+}
+
+private func quiescentUniforms(gridAxis: Int) -> GPUUniforms {
+    var parameters = SimulationParameters.default
+    parameters.velocityDissipation = 0
+    parameters.viscosity = 0
+    parameters.gravityMagnitude = 0
+    parameters.attractionMagnitude = 0
+    parameters.orbitalForceMagnitude = 0
+    parameters.vorticityStrength = 0
+    parameters.turbulenceStrength = 0
+    parameters.emitterInitialVelocity = 0
+    var uniforms = GPUUniforms(
+        parameters: parameters,
+        schedule: StepSchedule(stepCount: 1, stepDelta: 1.0 / 60.0),
+        elapsedTime: 0,
+        frameIndex: 0,
+        particleCapacity: 2_000_000
+    )
+    let axis = UInt32(gridAxis)
+    uniforms.gridSize = SIMD4(axis, axis, axis, 0)
+    return uniforms
 }
 
 private enum MetalHarnessError: Error {
@@ -52,25 +184,29 @@ private final class MetalTestHarness {
     private var pressureIndex = 0
     private var uniforms: GPUUniforms
 
-    init(gridAxis: Int) throws {
-        context = try MetalContext()
+    init(context: MetalContext? = nil, gridAxis: Int) throws {
+        if let context {
+            self.context = context
+        } else {
+            self.context = try MetalContext()
+        }
         self.gridAxis = gridAxis
-        computeDivergencePipeline = try Self.pipeline(named: "computeDivergence", context: context)
-        jacobiPressurePipeline = try Self.pipeline(named: "jacobiPressure", context: context)
+        computeDivergencePipeline = try Self.pipeline(named: "computeDivergence", context: self.context)
+        jacobiPressurePipeline = try Self.pipeline(named: "jacobiPressure", context: self.context)
         subtractPressureGradientPipeline = try Self.pipeline(
             named: "subtractPressureGradient",
-            context: context
+            context: self.context
         )
         velocityTextures = try [
-            Self.texture(context: context, format: .rgba16Float, axis: gridAxis),
-            Self.texture(context: context, format: .rgba16Float, axis: gridAxis),
+            Self.texture(context: self.context, format: .rgba16Float, axis: gridAxis),
+            Self.texture(context: self.context, format: .rgba16Float, axis: gridAxis),
         ]
         pressureTextures = try [
-            Self.texture(context: context, format: .r16Float, axis: gridAxis),
-            Self.texture(context: context, format: .r16Float, axis: gridAxis),
+            Self.texture(context: self.context, format: .r16Float, axis: gridAxis),
+            Self.texture(context: self.context, format: .r16Float, axis: gridAxis),
         ]
         divergenceTexture = try Self.texture(
-            context: context,
+            context: self.context,
             format: .r16Float,
             axis: gridAxis
         )
@@ -109,15 +245,54 @@ private final class MetalTestHarness {
     }
 
     func maximumAbsoluteDivergence() throws -> Float {
+        try maximumAbsoluteDivergence(texture: velocityTextures[velocityIndex])
+    }
+
+    func maximumAbsoluteDivergence(texture: MTLTexture) throws -> Float {
         guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw MetalHarnessError.commandEncoding
         }
-        try encodeDivergence(commandBuffer: commandBuffer)
+        try encodeDivergence(commandBuffer: commandBuffer, velocity: texture)
         try commitAndWait(commandBuffer)
 
         var values = [Float16](repeating: 0, count: gridAxis * gridAxis * gridAxis)
         read(texture: divergenceTexture, into: &values, components: 1)
         return values.lazy.map { abs(Float($0)) }.max() ?? 0
+    }
+
+    func seedAsymmetricBoundaryVelocity(texture: MTLTexture) {
+        var values = [Float16](repeating: 0, count: gridAxis * gridAxis * gridAxis * 4)
+        let halfAxis = Float(gridAxis) * 0.5
+        for z in 0..<gridAxis {
+            for y in 0..<gridAxis {
+                for x in 0..<gridAxis {
+                    let position = SIMD3<Float>(
+                        (Float(x) + 0.5 - halfAxis) / halfAxis,
+                        (Float(y) + 0.5 - halfAxis) / halfAxis,
+                        (Float(z) + 0.5 - halfAxis) / halfAxis
+                    )
+                    let offset = position - SIMD3<Float>(0.25, -0.15, 0.1)
+                    let falloff = exp(-2.5 * simd_dot(offset, offset))
+                    var velocity = offset * falloff * 3
+                    if x == 0 {
+                        velocity.x -= 1.5 * (1 + 0.2 * position.y)
+                    }
+                    let index = ((z * gridAxis + y) * gridAxis + x) * 4
+                    values[index] = Float16(velocity.x)
+                    values[index + 1] = Float16(velocity.y)
+                    values[index + 2] = Float16(velocity.z)
+                }
+            }
+        }
+        write(values, to: texture, components: 4)
+    }
+
+    func allValuesAreFinite(texture: MTLTexture, components: Int) -> Bool {
+        readValues(texture: texture, components: components).allSatisfy { Float($0).isFinite }
+    }
+
+    func maximumAbsoluteValue(texture: MTLTexture, components: Int) -> Float {
+        readValues(texture: texture, components: components).lazy.map { abs(Float($0)) }.max() ?? 0
     }
 
     func project(iterations: Int) throws {
@@ -164,12 +339,15 @@ private final class MetalTestHarness {
         return texture
     }
 
-    private func encodeDivergence(commandBuffer: MTLCommandBuffer) throws {
+    private func encodeDivergence(
+        commandBuffer: MTLCommandBuffer,
+        velocity: MTLTexture? = nil
+    ) throws {
         guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
             throw MetalHarnessError.commandEncoding
         }
         encoder.setComputePipelineState(computeDivergencePipeline)
-        encoder.setTexture(velocityTextures[velocityIndex], index: 0)
+        encoder.setTexture(velocity ?? velocityTextures[velocityIndex], index: 0)
         encoder.setTexture(divergenceTexture, index: 1)
         setUniforms(on: encoder)
         dispatch(encoder: encoder, pipeline: computeDivergencePipeline)
@@ -251,6 +429,15 @@ private final class MetalTestHarness {
                 slice: 0
             )
         }
+    }
+
+    private func readValues(texture: MTLTexture, components: Int) -> [Float16] {
+        var values = [Float16](
+            repeating: 0,
+            count: gridAxis * gridAxis * gridAxis * components
+        )
+        read(texture: texture, into: &values, components: components)
+        return values
     }
 
     private func commitAndWait(_ commandBuffer: MTLCommandBuffer) throws {

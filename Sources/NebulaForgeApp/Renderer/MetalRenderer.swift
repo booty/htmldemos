@@ -10,6 +10,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var lastFrameTime: TimeInterval?
     private var elapsedTime: Float = 0
     private var frameIndex: UInt32 = 0
+    private(set) var lastEncodingError: RendererError?
 
     init(context: MetalContext, colorPixelFormat: MTLPixelFormat) throws {
         self.context = context
@@ -39,13 +40,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     func draw(in view: MTKView) {
         guard
             let renderPassDescriptor = view.currentRenderPassDescriptor,
-            let drawable = view.currentDrawable,
-            let commandBuffer = context.queue.makeCommandBuffer()
+            let drawable = view.currentDrawable
         else {
             return
         }
 
-        commandBuffer.label = "Diagnostic Frame"
         let now = ProcessInfo.processInfo.systemUptime
         let wallDelta = lastFrameTime.map { now - $0 } ?? 1.0 / 60.0
         lastFrameTime = now
@@ -53,7 +52,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             wallDelta: wallDelta,
             speed: parameters.simulationSpeed
         )
-        for _ in 0..<schedule.stepCount {
+        for step in 0..<schedule.stepCount {
+            guard let simulationCommandBuffer = context.queue.makeCommandBuffer() else {
+                lastEncodingError = .commandEncoding("simulation command buffer")
+                return
+            }
+            simulationCommandBuffer.label = "Fluid Step \(step + 1)"
             let uniforms = GPUUniforms(
                 parameters: parameters,
                 schedule: schedule,
@@ -61,24 +65,40 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 frameIndex: frameIndex,
                 particleCapacity: 2_000_000
             )
-            fluidSolver.encodeStep(
-                commandBuffer: commandBuffer,
-                uniforms: uniforms,
-                force: .inactive
-            )
+            do {
+                try fluidSolver.encodeStep(
+                    commandBuffer: simulationCommandBuffer,
+                    uniforms: uniforms,
+                    force: .inactive
+                )
+            } catch let error as RendererError {
+                lastEncodingError = error
+                return
+            } catch {
+                lastEncodingError = .commandEncoding(error.localizedDescription)
+                return
+            }
+            simulationCommandBuffer.commit()
             elapsedTime += schedule.stepDelta
+            frameIndex &+= 1
         }
+        lastEncodingError = nil
 
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPassDescriptor) else {
+        guard
+            let renderCommandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = renderCommandBuffer.makeRenderCommandEncoder(
+                descriptor: renderPassDescriptor
+            )
+        else {
             return
         }
+        renderCommandBuffer.label = "Diagnostic Frame"
         encoder.label = "Diagnostic Gradient"
         encoder.setRenderPipelineState(diagnosticPipeline)
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         encoder.endEncoding()
-        commandBuffer.present(drawable)
-        commandBuffer.commit()
-        frameIndex &+= 1
+        renderCommandBuffer.present(drawable)
+        renderCommandBuffer.commit()
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}

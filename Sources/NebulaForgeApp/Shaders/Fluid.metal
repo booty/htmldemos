@@ -61,14 +61,15 @@ kernel void injectForces(
 
     float3 emitterOffset = position - u.emitterPositionRadius.xyz;
     float emitterRadius = max(u.emitterPositionRadius.w, 1.0e-4f);
-    float emitterWeight = smoothstep(emitterRadius, 0.0f, length(emitterOffset));
+    float emitterWeight = 1.0f - smoothstep(0.0f, emitterRadius, length(emitterOffset));
     velocity += u.emitterDirectionSpeed.xyz * u.emitterDirectionSpeed.w * emitterWeight * dt;
 
     velocity.y -= u.forces.x * dt;
     float radius = max(length(position), 1.0e-4f);
-    velocity += (-position / radius) * u.forces.y * dt * smoothstep(1.75f, 0.0f, radius);
+    float centralWeight = 1.0f - smoothstep(0.0f, 1.75f, radius);
+    velocity += (-position / radius) * u.forces.y * dt * centralWeight;
     velocity += cross(float3(0.0f, 1.0f, 0.0f), position / radius)
-        * u.forces.z * dt * smoothstep(1.75f, 0.0f, radius);
+        * u.forces.z * dt * centralWeight;
 
     float noise = sin(dot(position * u.turbulence.x, float3(12.9898f, 78.233f, 37.719f))
         + u.deltaAndTime.y * 1.7f);
@@ -225,6 +226,15 @@ kernel void clearFluid(
 ) {
     if (any(gid >= u.gridSize.xyz)) return;
     velocity.write(half4(half(0.0f)), gid);
+    scalar.write(half4(half(0.0f)), gid);
+}
+
+kernel void clearScalar(
+    texture3d<half, access::write> scalar [[texture(0)]],
+    constant GPUUniforms& u [[buffer(0)]],
+    uint3 gid [[thread_position_in_grid]]
+) {
+    if (any(gid >= u.gridSize.xyz)) return;
     scalar.write(half4(half(0.0f)), gid);
 }
 

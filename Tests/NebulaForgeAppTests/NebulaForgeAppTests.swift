@@ -32,6 +32,10 @@ final class NebulaForgeAppTests: XCTestCase {
             RendererError.pipeline("diagnostic render pipeline").errorDescription,
             "Metal pipeline creation failed for diagnostic render pipeline."
         )
+        XCTAssertEqual(
+            RendererError.commandEncoding("fluid projection").errorDescription,
+            "Metal command encoding failed for fluid projection."
+        )
     }
 
     func testRendererCommandsPreserveTheirPayloads() {
