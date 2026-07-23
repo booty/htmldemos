@@ -27,4 +27,10 @@ final class SimulationParametersTests: XCTestCase {
         XCTAssertEqual(result.viscosity, SimulationParameters.default.viscosity)
         XCTAssertEqual(result.exposure, SimulationParameters.default.exposure)
     }
+
+    func testEveryPresetValidatesWithoutChangingItself() {
+        for preset in Preset.allCases {
+            XCTAssertEqual(preset.parameters, preset.parameters.validated())
+        }
+    }
 }
