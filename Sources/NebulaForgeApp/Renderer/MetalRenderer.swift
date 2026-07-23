@@ -6,11 +6,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let fluidSolver: FluidSolver
     private let particleSystem: ParticleSystem
     private let particleRenderer: ParticleRenderer
+    private let postProcessor: PostProcessor
     private let timeStepper = TimeStepper()
     private var parameters = SimulationParameters.default
     private var lastFrameTime: TimeInterval?
     private var elapsedTime: Float = 0
     private var frameIndex: UInt32 = 0
+    private var lastRenderScale: Float?
     private let interactionLock = NSLock()
     private var camera = Camera.default
     private var interactionForce = InteractionForce.inactive
@@ -25,14 +27,12 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             particleBuffer: particleSystem.currentBuffer,
             destinationPixelFormat: colorPixelFormat
         )
+        postProcessor = try PostProcessor(context: context)
         super.init()
     }
 
     func draw(in view: MTKView) {
-        guard
-            let renderPassDescriptor = view.currentRenderPassDescriptor,
-            let drawable = view.currentDrawable
-        else {
+        guard view.currentRenderPassDescriptor != nil, let drawable = view.currentDrawable else {
             return
         }
 
@@ -89,6 +89,10 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         }
         renderCommandBuffer.label = "HDR Particle Frame"
         let validatedParameters = parameters.validated()
+        if let lastRenderScale, lastRenderScale != validatedParameters.renderScale {
+            postProcessor.resetTemporalHistory()
+        }
+        lastRenderScale = validatedParameters.renderScale
         let drawableSize = view.drawableSize
         let aspect = drawableSize.height > 0
             ? Float(drawableSize.width / drawableSize.height)
@@ -106,9 +110,18 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 drawableSize: drawableSize,
                 renderScale: validatedParameters.renderScale
             )
-            try particleRenderer.encodeDisplay(
+            guard
+                let hdrTexture = particleRenderer.hdrTexture,
+                let depthTexture = particleRenderer.depthTexture
+            else {
+                throw RendererError.commandEncoding("particle post-process inputs")
+            }
+            try postProcessor.encode(
                 commandBuffer: renderCommandBuffer,
-                renderPassDescriptor: renderPassDescriptor
+                source: hdrTexture,
+                depth: depthTexture,
+                destination: drawable.texture,
+                parameters: validatedParameters
             )
         } catch let error as RendererError {
             lastEncodingError = error
@@ -122,7 +135,13 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
         renderCommandBuffer.commit()
     }
 
-    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        postProcessor.resetTemporalHistory()
+    }
+
+    func resetTemporalHistory() {
+        postProcessor.resetTemporalHistory()
+    }
 
     func updateCamera(_ camera: Camera) {
         interactionLock.lock()

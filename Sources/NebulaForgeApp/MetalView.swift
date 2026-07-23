@@ -47,6 +47,7 @@ struct MetalView: NSViewRepresentable {
     private func configuredView(device: MTLDevice?) -> InteractiveMetalView {
         let view = InteractiveMetalView(frame: .zero, device: device)
         view.colorPixelFormat = .bgra8Unorm_srgb
+        view.framebufferOnly = false
         view.clearColor = MTLClearColor(red: 0.01, green: 0.005, blue: 0.04, alpha: 1)
         view.preferredFramesPerSecond = 60
         view.enableSetNeedsDisplay = false
