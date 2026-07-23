@@ -21,10 +21,71 @@ final class CameraTests: XCTestCase {
         XCTAssertEqual(PointerMode(modifiers: [.option]), .attract)
         XCTAssertEqual(PointerMode(modifiers: [.control]), .repel)
         XCTAssertEqual(PointerMode(modifiers: [.command]), .orbit)
+        XCTAssertEqual(PointerMode(modifiers: [.capsLock, .option]), .attract)
+        XCTAssertEqual(PointerMode(modifiers: [.function, .command]), .orbit)
         XCTAssertNil(PointerMode(modifiers: []))
         XCTAssertNil(PointerMode(modifiers: [.shift]))
         XCTAssertNil(PointerMode(modifiers: [.option, .control]))
         XCTAssertNil(PointerMode(modifiers: [.shift, .option]))
+    }
+
+    func testPrimaryDragRoutesOptionAndCommandToForceModes() {
+        XCTAssertEqual(
+            PointerEventRouter.route(
+                button: .primary,
+                phase: .drag,
+                modifiers: [.option]
+            ),
+            PointerRoute(action: .force(.attract), clearsForce: false)
+        )
+        XCTAssertEqual(
+            PointerEventRouter.route(
+                button: .primary,
+                phase: .drag,
+                modifiers: [.command]
+            ),
+            PointerRoute(action: .force(.orbit), clearsForce: false)
+        )
+    }
+
+    func testSecondaryControlDragRoutesToRepel() {
+        XCTAssertEqual(
+            PointerEventRouter.route(
+                button: .secondary,
+                phase: .drag,
+                modifiers: [.control]
+            ),
+            PointerRoute(action: .force(.repel), clearsForce: false)
+        )
+    }
+
+    func testUnsupportedPointerRoutesDoNotOrbitOrInjectAndClearForce() {
+        let plainSecondary = PointerEventRouter.route(
+            button: .secondary,
+            phase: .drag,
+            modifiers: []
+        )
+        let mixedPrimary = PointerEventRouter.route(
+            button: .primary,
+            phase: .drag,
+            modifiers: [.shift, .option]
+        )
+
+        XCTAssertEqual(plainSecondary.action, .none)
+        XCTAssertTrue(plainSecondary.clearsForce)
+        XCTAssertEqual(mixedPrimary.action, .none)
+        XCTAssertTrue(mixedPrimary.clearsForce)
+    }
+
+    func testSecondaryMouseUpRoutesToForceClear() {
+        XCTAssertEqual(
+            PointerEventRouter.route(
+                button: .secondary,
+                phase: .up,
+                modifiers: [.control]
+            ),
+            PointerRoute(action: .none, clearsForce: true)
+        )
     }
 
     func testCameraClampsPitchAndDistance() {

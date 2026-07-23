@@ -6,8 +6,11 @@ enum PointerMode: UInt32 {
     case repel = 2
     case orbit = 3
 
+    /// Caps Lock and Function describe keyboard state rather than a pointer
+    /// gesture, so they are ignored. Gesture modifiers must otherwise match
+    /// one supported single-key combination exactly.
     init?(modifiers: NSEvent.ModifierFlags) {
-        switch modifiers.intersection([.shift, .option, .control, .command]) {
+        switch modifiers.gestureModifiers {
         case [.option]:
             self = .attract
         case [.control]:
@@ -16,6 +19,57 @@ enum PointerMode: UInt32 {
             self = .orbit
         default:
             return nil
+        }
+    }
+}
+
+enum PointerButton: Equatable {
+    case primary
+    case secondary
+}
+
+enum PointerPhase: Equatable {
+    case down
+    case drag
+    case up
+}
+
+enum PointerAction: Equatable {
+    case none
+    case cameraOrbit
+    case force(PointerMode)
+}
+
+struct PointerRoute: Equatable {
+    let action: PointerAction
+    let clearsForce: Bool
+}
+
+enum PointerEventRouter {
+    static func route(
+        button: PointerButton,
+        phase: PointerPhase,
+        modifiers: NSEvent.ModifierFlags
+    ) -> PointerRoute {
+        guard phase != .up else {
+            return PointerRoute(action: .none, clearsForce: true)
+        }
+
+        let mode = PointerMode(modifiers: modifiers)
+        switch button {
+        case .primary:
+            if let mode {
+                return PointerRoute(action: .force(mode), clearsForce: false)
+            }
+            let action: PointerAction = phase == .drag && modifiers.gestureModifiers.isEmpty
+                ? .cameraOrbit
+                : .none
+            return PointerRoute(action: action, clearsForce: true)
+        case .secondary:
+            if mode == .repel {
+                return PointerRoute(action: .force(.repel), clearsForce: false)
+            }
+            return PointerRoute(action: .none, clearsForce: true)
         }
     }
 }
@@ -76,5 +130,11 @@ private extension Ray {
         guard exit >= 0 else { return nil }
         let distance = entry >= 0 ? entry : exit
         return origin + direction * distance
+    }
+}
+
+private extension NSEvent.ModifierFlags {
+    var gestureModifiers: NSEvent.ModifierFlags {
+        intersection([.shift, .option, .control, .command])
     }
 }

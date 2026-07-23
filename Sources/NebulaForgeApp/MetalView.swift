@@ -66,16 +66,24 @@ struct MetalView: NSViewRepresentable {
         private var camera = Camera.default
         private let pointerInteractor = PointerInteractor()
 
-        func pointerDown(_ event: NSEvent, in view: MTKView) {
-            updateDrag(event, in: view, appliesCameraDelta: false)
+        func pointerDown(
+            _ event: NSEvent,
+            button: PointerButton,
+            in view: MTKView
+        ) {
+            applyRoute(for: event, button: button, phase: .down, in: view)
         }
 
-        func pointerDragged(_ event: NSEvent, in view: MTKView) {
-            updateDrag(event, in: view, appliesCameraDelta: true)
+        func pointerDragged(
+            _ event: NSEvent,
+            button: PointerButton,
+            in view: MTKView
+        ) {
+            applyRoute(for: event, button: button, phase: .drag, in: view)
         }
 
-        func pointerUp() {
-            clearInteractionForce()
+        func pointerUp(_ event: NSEvent, button: PointerButton, in view: MTKView) {
+            applyRoute(for: event, button: button, phase: .up, in: view)
         }
 
         func pointerExited() {
@@ -96,27 +104,33 @@ struct MetalView: NSViewRepresentable {
             renderer?.updateInteractionForce(nil)
         }
 
-        private func updateDrag(
-            _ event: NSEvent,
-            in view: MTKView,
-            appliesCameraDelta: Bool
+        private func applyRoute(
+            for event: NSEvent,
+            button: PointerButton,
+            phase: PointerPhase,
+            in view: MTKView
         ) {
-            if let mode = PointerMode(modifiers: event.modifierFlags) {
-                updateInteractionForce(mode: mode, event: event, in: view)
-                return
+            let route = PointerEventRouter.route(
+                button: button,
+                phase: phase,
+                modifiers: event.modifierFlags
+            )
+            if route.clearsForce {
+                clearInteractionForce()
             }
 
-            clearInteractionForce()
-            let dragModifiers = event.modifierFlags.intersection([
-                .shift, .option, .control, .command
-            ])
-            guard appliesCameraDelta, dragModifiers.isEmpty else { return }
-
-            camera.orbit(by: SIMD2(
-                Float(event.deltaX) * Self.orbitSensitivity,
-                -Float(event.deltaY) * Self.orbitSensitivity
-            ))
-            renderer?.updateCamera(camera)
+            switch route.action {
+            case .none:
+                break
+            case .force(let mode):
+                updateInteractionForce(mode: mode, event: event, in: view)
+            case .cameraOrbit:
+                camera.orbit(by: SIMD2(
+                    Float(event.deltaX) * Self.orbitSensitivity,
+                    -Float(event.deltaY) * Self.orbitSensitivity
+                ))
+                renderer?.updateCamera(camera)
+            }
         }
 
         private func updateInteractionForce(
@@ -149,9 +163,9 @@ struct MetalView: NSViewRepresentable {
 
 @MainActor
 private protocol InteractiveMetalViewDelegate: AnyObject {
-    func pointerDown(_ event: NSEvent, in view: MTKView)
-    func pointerDragged(_ event: NSEvent, in view: MTKView)
-    func pointerUp()
+    func pointerDown(_ event: NSEvent, button: PointerButton, in view: MTKView)
+    func pointerDragged(_ event: NSEvent, button: PointerButton, in view: MTKView)
+    func pointerUp(_ event: NSEvent, button: PointerButton, in view: MTKView)
     func pointerExited()
     func pointerScrolled(_ event: NSEvent)
     func pointerMagnified(_ event: NSEvent)
@@ -180,15 +194,28 @@ private final class InteractiveMetalView: MTKView {
 
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
-        interactionDelegate?.pointerDown(event, in: self)
+        interactionDelegate?.pointerDown(event, button: .primary, in: self)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        interactionDelegate?.pointerDragged(event, in: self)
+        interactionDelegate?.pointerDragged(event, button: .primary, in: self)
     }
 
     override func mouseUp(with event: NSEvent) {
-        interactionDelegate?.pointerUp()
+        interactionDelegate?.pointerUp(event, button: .primary, in: self)
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        window?.makeFirstResponder(self)
+        interactionDelegate?.pointerDown(event, button: .secondary, in: self)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        interactionDelegate?.pointerDragged(event, button: .secondary, in: self)
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        interactionDelegate?.pointerUp(event, button: .secondary, in: self)
     }
 
     override func mouseExited(with event: NSEvent) {
