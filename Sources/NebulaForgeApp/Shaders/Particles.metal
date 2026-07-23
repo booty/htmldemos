@@ -82,14 +82,13 @@ static GPUParticle respawnParticle(
 
 static GPUParticle dormantParticle(
     uint seed,
-    float delay,
     constant GPUUniforms& u
 ) {
     float3 position = clamp(u.emitterPositionRadius.xyz, -1.0f, 1.0f);
     GPUParticle particle;
-    // Negative age is the renderer-visible dormant invariant. Its magnitude
-    // is the remaining delay in seconds before this particle can respawn.
-    particle.positionAge = float4(position, -max(delay, 1.0e-6f));
+    // Negative age is a renderer-visible sentinel. Eligibility is recomputed
+    // every update from absolute time and the current emission rate.
+    particle.positionAge = float4(position, -1.0f);
     particle.previousPositionLifetime = float4(
         position,
         max(u.particleBehavior.x, 0.5f)
@@ -98,23 +97,22 @@ static GPUParticle dormantParticle(
     return particle;
 }
 
-static GPUParticle recycleParticle(
+static bool emissionPhaseCrossed(
     uint seed,
     uint particleIndex,
-    float dt,
     uint activeCount,
     constant GPUUniforms& u
 ) {
-    uint slot = particleIndex % max(activeCount, 1u);
-    float recycleDelay = max(
-        (float(slot) + particleRandom(seed ^ 0x85ebca6bu))
-            / max(u.particleBehavior.z, 1.0f)
-            - dt,
-        0.0f
-    );
-    return recycleDelay > 0.0f
-        ? dormantParticle(seed, recycleDelay, u)
-        : respawnParticle(seed, u);
+    float rate = max(u.particleBehavior.z, 1.0f);
+    float cycle = float(max(activeCount, 1u)) / rate;
+    float phase = (
+        float(particleIndex) + particleRandom(seed ^ 0x85ebca6bu)
+    ) / rate;
+    float intervalEnd = max(u.deltaAndTime.y, 0.0f);
+    float intervalStart = max(intervalEnd - max(u.deltaAndTime.x, 0.0f), 0.0f);
+    float previousCycle = floor((intervalStart - phase) / cycle);
+    float currentCycle = floor((intervalEnd - phase) / cycle);
+    return currentCycle > previousCycle;
 }
 
 kernel void initializeParticles(
@@ -134,13 +132,9 @@ kernel void initializeParticles(
         1.0f
     );
     float lifetime = max(u.particleBehavior.x, 0.5f);
-    float emissionRate = max(u.particleBehavior.z, 1.0f);
-    float activationDelay = (
-        float(gid) + particleRandom(seed ^ 0x1b56c4e9u)
-    ) / emissionRate;
 
     GPUParticle particle;
-    particle.positionAge = float4(position, -max(activationDelay, 1.0e-6f));
+    particle.positionAge = float4(position, -1.0f);
     particle.previousPositionLifetime = float4(position, lifetime);
     particle.velocitySeed = float4(0.0f, 0.0f, 0.0f, float(seed));
     particles[gid] = particle;
@@ -175,18 +169,17 @@ kernel void updateParticles(
         ? uint(abs(storedSeed))
         : ((particleHash(gid + 1u) & 0x00ffffffu) | 1u);
     if (finiteParticle && age < 0.0f) {
-        float advancedAge = age + dt;
-        if (advancedAge < 0.0f) {
-            particle.positionAge.w = advancedAge;
+        if (emissionPhaseCrossed(seed, gid, activeCount, u)) {
+            particles[gid] = respawnParticle(seed, u);
+        } else {
+            particle.positionAge.w = -1.0f;
             particle.previousPositionLifetime.w = max(u.particleBehavior.x, 0.5f);
             particles[gid] = particle;
-        } else {
-            particles[gid] = respawnParticle(seed, u);
         }
         return;
     }
     if (!finiteParticle || lifetime <= 0.0f || age >= lifetime || outsideDomain) {
-        particles[gid] = recycleParticle(seed, gid, dt, activeCount, u);
+        particles[gid] = dormantParticle(seed, u);
         return;
     }
 
@@ -204,7 +197,7 @@ kernel void updateParticles(
         || !all(isfinite(particleVelocity))
         || !isfinite(nextAge);
     if (invalidUpdate || nextAge >= lifetime || any(abs(nextPosition) > 1.0f)) {
-        particles[gid] = recycleParticle(seed, gid, dt, activeCount, u);
+        particles[gid] = dormantParticle(seed, u);
         return;
     }
 

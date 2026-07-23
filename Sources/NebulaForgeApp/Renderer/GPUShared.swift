@@ -90,7 +90,7 @@ struct GPUParticle {
 
     var lifetime: Float { previousPositionLifetime.w }
 
-    /// Task 7 must skip particles with negative age. Its magnitude is the
-    /// deterministic number of seconds remaining before emission eligibility.
+    /// Task 7 must skip particles with negative age. Dormancy is a sentinel;
+    /// emission eligibility is recomputed from absolute simulation time.
     var isDormant: Bool { age < 0 }
 }

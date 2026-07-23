@@ -67,6 +67,8 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 frameIndex: frameIndex,
                 particleCapacity: 2_000_000
             )
+            var particleUniforms = uniforms
+            particleUniforms.deltaAndTime.y += schedule.stepDelta
             do {
                 let pendingFluidState = try fluidSolver.encodeStep(
                     commandBuffer: simulationCommandBuffer,
@@ -76,7 +78,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 try particleSystem.encodeUpdate(
                     commandBuffer: simulationCommandBuffer,
                     velocityTexture: fluidSolver.velocityTexture(for: pendingFluidState),
-                    uniforms: uniforms
+                    uniforms: particleUniforms
                 )
                 fluidSolver.publishStep(pendingFluidState)
             } catch let error as RendererError {

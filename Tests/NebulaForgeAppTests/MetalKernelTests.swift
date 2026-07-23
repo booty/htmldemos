@@ -29,6 +29,7 @@ final class MetalKernelTests: XCTestCase {
             harness.setParticleParameters(parameters)
             try harness.seedExpiredParticles()
             try harness.updateParticles(delta: 1.0 / 60.0)
+            try harness.updateParticles(delta: 1.0 / 60.0)
 
             for particle in try harness.readParticles() {
                 XCTAssertEqual(particle.lifetime, lifetime)
@@ -45,6 +46,7 @@ final class MetalKernelTests: XCTestCase {
         parameters.emissionRate = 500_000
         harness.setParticleParameters(parameters)
         try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
         try harness.updateParticles(delta: 1.0 / 60.0)
 
         for particle in try harness.readParticles() {
@@ -63,6 +65,7 @@ final class MetalKernelTests: XCTestCase {
         parameters.emissionRate = 500_000
         harness.setParticleParameters(parameters)
         try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
         try harness.updateParticles(delta: 1.0 / 60.0)
 
         let directions = try harness.readParticles().map {
@@ -111,12 +114,14 @@ final class MetalKernelTests: XCTestCase {
         lowRateHarness.setParticleParameters(lowRate)
         try lowRateHarness.seedExpiredParticles()
         try lowRateHarness.updateParticles(delta: 1.0 / 60.0)
+        try lowRateHarness.updateParticles(delta: 1.0 / 60.0)
 
         let highRateHarness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
         var highRate = SimulationParameters.default
         highRate.emissionRate = 500_000
         highRateHarness.setParticleParameters(highRate)
         try highRateHarness.seedExpiredParticles()
+        try highRateHarness.updateParticles(delta: 1.0 / 60.0)
         try highRateHarness.updateParticles(delta: 1.0 / 60.0)
 
         let lowRateAlive = try lowRateHarness.readParticles().filter { $0.age >= 0 }.count
@@ -126,13 +131,89 @@ final class MetalKernelTests: XCTestCase {
         XCTAssertEqual(highRateAlive, 64)
     }
 
+    func testRepeatingEmissionPhasesTrackRateAcrossMultipleLifetimes() throws {
+        let particleCount = 1_024
+        let lifetime: Float = 0.5
+        let duration: Float = 2.5
+        let delta: Float = 0.002
+
+        func observedTransitions(rate: Float) throws -> Int {
+            let harness = try MetalTestHarness(gridAxis: 8, particleCount: particleCount)
+            var parameters = SimulationParameters.default
+            parameters.particleLifetime = lifetime
+            parameters.emissionRate = rate
+            parameters.emitterInitialVelocity = 0
+            try harness.initializeParticles(parameters: parameters)
+            return try harness.countDormantToActiveTransitions(duration: duration, delta: delta)
+        }
+
+        let lowRate: Float = 1_000
+        let highRate: Float = 4_000
+        let lowObserved = try observedTransitions(rate: lowRate)
+        let highObserved = try observedTransitions(rate: highRate)
+        let lifetimeCapacity = Float(particleCount) / lifetime
+        let lowExpected = min(lowRate, lifetimeCapacity) * duration
+        let highExpected = min(highRate, lifetimeCapacity) * duration
+        let tolerance: Float = 0.15
+
+        XCTAssertLessThan(lowObserved, highObserved)
+        XCTAssertLessThanOrEqual(
+            abs(Float(lowObserved) - lowExpected),
+            lowExpected * tolerance
+        )
+        XCTAssertLessThanOrEqual(
+            abs(Float(highObserved) - highExpected),
+            highExpected * tolerance
+        )
+    }
+
+    func testLiveLowToHighRateActivatesWithinNewCycle() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 1_024)
+        var parameters = SimulationParameters.default
+        parameters.particleLifetime = 20
+        parameters.emissionRate = 1_000
+        try harness.initializeParticles(parameters: parameters)
+        try harness.updateParticles(delta: 0.02)
+        let aliveBeforeChange = try harness.readParticles().filter { !$0.isDormant }.count
+
+        parameters.emissionRate = 500_000
+        harness.setParticleParameters(parameters)
+        try harness.updateParticles(delta: 0.005)
+        let aliveAfterChange = try harness.readParticles().filter { !$0.isDormant }.count
+
+        XCTAssertLessThan(aliveBeforeChange, 50)
+        XCTAssertEqual(aliveAfterChange, 1_024)
+    }
+
+    func testLiveHighToLowRateSlowsWithoutDelayedBatch() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 1_024)
+        var parameters = SimulationParameters.default
+        parameters.particleLifetime = 0.5
+        parameters.emissionRate = 4_000
+        harness.setParticleParameters(parameters)
+        try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 0.001)
+
+        parameters.emissionRate = 1_000
+        harness.setParticleParameters(parameters)
+        let transitions = try harness.countDormantToActiveTransitions(
+            duration: 0.1,
+            delta: 0.01
+        )
+
+        XCTAssertGreaterThanOrEqual(transitions, 80)
+        XCTAssertLessThanOrEqual(transitions, 120)
+    }
+
     func testExpiredParticlesRespawnInsideEmitter() throws {
         let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
         try harness.seedExpiredParticles()
         try harness.updateParticles(delta: 1.0 / 60.0)
+        try harness.updateParticles(delta: 1.0 / 60.0)
         let firstRespawn = try harness.readParticles()
 
         try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
         try harness.updateParticles(delta: 1.0 / 60.0)
         let secondRespawn = try harness.readParticles()
 
@@ -382,6 +463,7 @@ private final class MetalTestHarness {
     private var velocityIndex = 0
     private var pressureIndex = 0
     private var uniforms: GPUUniforms
+    private var particleElapsedTime: Float = 0
 
     init(context: MetalContext? = nil, gridAxis: Int, particleCount: Int = 0) throws {
         if let context {
@@ -440,6 +522,7 @@ private final class MetalTestHarness {
         guard let initializeParticlesPipeline, let particleBuffer else {
             throw MetalHarnessError.resourceAllocation("particle resources")
         }
+        particleElapsedTime = 0
         setParticleParameters(parameters)
         var initialization = SIMD4<UInt32>(0x4e_46_47_31, UInt32(particleCount), 0, 0)
         guard
@@ -466,7 +549,7 @@ private final class MetalTestHarness {
         uniforms = GPUUniforms(
             parameters: parameters,
             schedule: StepSchedule(stepCount: 1, stepDelta: uniforms.deltaAndTime.x),
-            elapsedTime: uniforms.deltaAndTime.y,
+            elapsedTime: particleElapsedTime,
             frameIndex: uniforms.particleCounts.z,
             particleCapacity: particleCount
         )
@@ -498,6 +581,8 @@ private final class MetalTestHarness {
             throw MetalHarnessError.resourceAllocation("particle resources")
         }
         uniforms.deltaAndTime.x = delta
+        particleElapsedTime += delta
+        uniforms.deltaAndTime.y = particleElapsedTime
         uniforms.particleCounts.x = UInt32(particleCount)
         uniforms.particleCounts.y = UInt32(particleCount)
         guard
@@ -513,6 +598,22 @@ private final class MetalTestHarness {
         dispatchParticles(encoder: encoder, pipeline: updateParticlesPipeline)
         encoder.endEncoding()
         try commitAndWait(commandBuffer)
+    }
+
+    func countDormantToActiveTransitions(duration: Float, delta: Float) throws -> Int {
+        var previousDormancy = try readParticles().map(\.isDormant)
+        var transitions = 0
+        let stepCount = Int((duration / delta).rounded())
+
+        for _ in 0..<stepCount {
+            try updateParticles(delta: delta)
+            let currentDormancy = try readParticles().map(\.isDormant)
+            transitions += zip(previousDormancy, currentDormancy).filter {
+                $0.0 && !$0.1
+            }.count
+            previousDormancy = currentDormancy
+        }
+        return transitions
     }
 
     func readParticles() throws -> [GPUParticle] {
