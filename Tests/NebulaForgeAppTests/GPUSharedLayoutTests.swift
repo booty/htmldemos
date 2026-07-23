@@ -10,7 +10,7 @@ final class GPUSharedLayoutTests: XCTestCase {
     }
 
     func testGPUUniformLayoutMatchesMetalABI() {
-        XCTAssertEqual(MemoryLayout<GPUUniforms>.stride, 112)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.stride, 128)
         XCTAssertEqual(MemoryLayout<InteractionForce>.stride, 48)
         XCTAssertEqual(MemoryLayout<GPUParticle>.stride, 48)
     }
@@ -23,6 +23,7 @@ final class GPUSharedLayoutTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.emitterPositionRadius), 64)
         XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.emitterDirectionSpeed), 80)
         XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.particleCounts), 96)
+        XCTAssertEqual(MemoryLayout<GPUUniforms>.offset(of: \.particleBehavior), 112)
 
         XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.positionRadius), 0)
         XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.directionStrength), 16)
@@ -42,6 +43,10 @@ final class GPUSharedLayoutTests: XCTestCase {
         parameters.attractionMagnitude = 3
         parameters.orbitalForceMagnitude = 4
         parameters.vorticityStrength = 5
+        parameters.particleLifetime = 6
+        parameters.emitterSpread = 0.4
+        parameters.emissionRate = 12_000
+        parameters.particleDrag = 2.5
 
         let uniforms = GPUUniforms(
             parameters: parameters,
@@ -54,6 +59,8 @@ final class GPUSharedLayoutTests: XCTestCase {
         XCTAssertEqual(uniforms.gridSize, SIMD4(64, 64, 64, 0))
         XCTAssertEqual(uniforms.deltaAndTime, SIMD4(0.01, 1.5, 0.25, 0.005))
         XCTAssertEqual(uniforms.forces, SIMD4(2, 3, 4, 5))
+        XCTAssertEqual(uniforms.turbulence, SIMD4(2, 8, 0, 0))
         XCTAssertEqual(uniforms.particleCounts, SIMD4(500_000, 2_000_000, 7, 32))
+        XCTAssertEqual(uniforms.particleBehavior, SIMD4(6, 0.4, 12_000, 2.5))
     }
 }

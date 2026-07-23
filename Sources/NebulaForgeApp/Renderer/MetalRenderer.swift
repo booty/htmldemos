@@ -68,16 +68,17 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 particleCapacity: 2_000_000
             )
             do {
-                try fluidSolver.encodeStep(
+                let pendingFluidState = try fluidSolver.encodeStep(
                     commandBuffer: simulationCommandBuffer,
                     uniforms: uniforms,
                     force: .inactive
                 )
                 try particleSystem.encodeUpdate(
                     commandBuffer: simulationCommandBuffer,
-                    velocityTexture: fluidSolver.velocityTexture,
+                    velocityTexture: fluidSolver.velocityTexture(for: pendingFluidState),
                     uniforms: uniforms
                 )
+                fluidSolver.publishStep(pendingFluidState)
             } catch let error as RendererError {
                 lastEncodingError = error
                 return

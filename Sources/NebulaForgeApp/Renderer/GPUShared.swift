@@ -8,6 +8,7 @@ struct GPUUniforms {
     var emitterPositionRadius: SIMD4<Float>
     var emitterDirectionSpeed: SIMD4<Float>
     var particleCounts: SIMD4<UInt32>
+    var particleBehavior: SIMD4<Float>
 
     init(
         parameters: SimulationParameters,
@@ -34,8 +35,8 @@ struct GPUUniforms {
         turbulence = SIMD4(
             parameters.turbulenceScale,
             parameters.turbulenceStrength,
-            parameters.emissionRate,
-            parameters.particleDrag
+            0,
+            0
         )
         emitterPositionRadius = SIMD4(
             parameters.emitterPosition.x,
@@ -54,6 +55,12 @@ struct GPUUniforms {
             UInt32(max(0, particleCapacity)),
             frameIndex,
             UInt32(parameters.pressureIterations)
+        )
+        particleBehavior = SIMD4(
+            parameters.particleLifetime,
+            parameters.emitterSpread,
+            parameters.emissionRate,
+            parameters.particleDrag
         )
     }
 }
@@ -82,4 +89,8 @@ struct GPUParticle {
     var age: Float { positionAge.w }
 
     var lifetime: Float { previousPositionLifetime.w }
+
+    /// Task 7 must skip particles with negative age. Its magnitude is the
+    /// deterministic number of seconds remaining before emission eligibility.
+    var isDormant: Bool { age < 0 }
 }

@@ -88,7 +88,7 @@ final class FluidSolver {
         commandBuffer: MTLCommandBuffer,
         uniforms: GPUUniforms,
         force: InteractionForce
-    ) throws {
+    ) throws -> FluidStepState {
         var uniforms = uniforms
         let axis = UInt32(gridAxis)
         uniforms.gridSize = SIMD4(axis, axis, axis, 0)
@@ -173,7 +173,15 @@ final class FluidSolver {
             uniforms: uniforms
         )
         pendingState.velocityIndex = 1 - pendingState.velocityIndex
-        stepState = pendingState
+        return pendingState
+    }
+
+    func velocityTexture(for state: FluidStepState) -> MTLTexture {
+        velocityTextures[state.velocityIndex]
+    }
+
+    func publishStep(_ state: FluidStepState) {
+        stepState = state
     }
 
     private static func pipeline(

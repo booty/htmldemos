@@ -1,4 +1,7 @@
 import Metal
+import NebulaForgeCore
+
+typealias ParticleEncoderFactory = (MTLCommandBuffer) -> MTLComputeCommandEncoder?
 
 final class ParticleSystem {
     static let maximumCapacity = 2_000_000
@@ -7,9 +10,17 @@ final class ParticleSystem {
 
     private let capacity: Int
     private let updateParticlesPipeline: MTLComputePipelineState
+    private let updateEncoderFactory: ParticleEncoderFactory
 
-    init(context: MetalContext) throws {
+    init(
+        context: MetalContext,
+        initialParameters: SimulationParameters = .default,
+        updateEncoderFactory: ParticleEncoderFactory? = nil
+    ) throws {
         capacity = Self.maximumCapacity
+        self.updateEncoderFactory = updateEncoderFactory ?? { commandBuffer in
+            commandBuffer.makeComputeCommandEncoder()
+        }
         let initializeParticlesPipeline = try Self.pipeline(
             named: "initializeParticles",
             context: context
@@ -47,6 +58,18 @@ final class ParticleSystem {
         encoder.setComputePipelineState(initializeParticlesPipeline)
         encoder.setBuffer(particleBuffer, offset: 0, index: 0)
         encoder.setBuffer(initializationBuffer, offset: 0, index: 1)
+        var initialUniforms = GPUUniforms(
+            parameters: initialParameters,
+            schedule: StepSchedule(stepCount: 1, stepDelta: 1.0 / 60.0),
+            elapsedTime: 0,
+            frameIndex: 0,
+            particleCapacity: capacity
+        )
+        encoder.setBytes(
+            &initialUniforms,
+            length: MemoryLayout<GPUUniforms>.stride,
+            index: 2
+        )
         Self.dispatch(
             count: capacity,
             encoder: encoder,
@@ -73,7 +96,7 @@ final class ParticleSystem {
             capacity
         )
         guard activeCount > 0 else { return }
-        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+        guard let encoder = updateEncoderFactory(commandBuffer) else {
             throw RendererError.commandEncoding("particle update")
         }
         encoder.label = "Update Tracer Particles"

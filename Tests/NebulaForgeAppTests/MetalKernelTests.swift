@@ -5,6 +5,127 @@ import simd
 @testable import NebulaForgeApp
 
 final class MetalKernelTests: XCTestCase {
+    func testParticleLifetimeUsesValidatedMinimumDefaultAndMaximum() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+
+        for lifetime: Float in [0.5, 7, 20] {
+            var parameters = SimulationParameters.default
+            parameters.particleLifetime = lifetime
+            try harness.initializeParticles(parameters: parameters)
+
+            for particle in try harness.readParticles() {
+                XCTAssertEqual(particle.lifetime, lifetime)
+            }
+        }
+    }
+
+    func testRespawnUsesValidatedMinimumDefaultAndMaximumLifetime() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+
+        for lifetime: Float in [0.5, 7, 20] {
+            var parameters = SimulationParameters.default
+            parameters.particleLifetime = lifetime
+            parameters.emissionRate = 500_000
+            harness.setParticleParameters(parameters)
+            try harness.seedExpiredParticles()
+            try harness.updateParticles(delta: 1.0 / 60.0)
+
+            for particle in try harness.readParticles() {
+                XCTAssertEqual(particle.lifetime, lifetime)
+            }
+        }
+    }
+
+    func testZeroEmitterSpreadPreservesNormalizedDirection() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var parameters = SimulationParameters.default
+        parameters.emitterDirection = SIMD3(0, 1, 0)
+        parameters.emitterSpread = 0
+        parameters.emitterInitialVelocity = 2
+        parameters.emissionRate = 500_000
+        harness.setParticleParameters(parameters)
+        try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
+
+        for particle in try harness.readParticles() {
+            XCTAssertEqual(particle.velocitySeed.x, 0)
+            XCTAssertEqual(particle.velocitySeed.y, 2)
+            XCTAssertEqual(particle.velocitySeed.z, 0)
+        }
+    }
+
+    func testNonzeroEmitterSpreadVariesLaunchDirections() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var parameters = SimulationParameters.default
+        parameters.emitterDirection = SIMD3(0, 1, 0)
+        parameters.emitterSpread = 0.5
+        parameters.emitterInitialVelocity = 1
+        parameters.emissionRate = 500_000
+        harness.setParticleParameters(parameters)
+        try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
+
+        let directions = try harness.readParticles().map {
+            SIMD3($0.velocitySeed.x, $0.velocitySeed.y, $0.velocitySeed.z)
+        }
+        XCTAssertTrue(directions.allSatisfy { direction in
+            direction.x.isFinite
+                && direction.y.isFinite
+                && direction.z.isFinite
+                && abs(simd_length(direction) - 1) < 0.000_01
+        })
+        let minimumConeDot = Float(cos(Double.pi / 4))
+        XCTAssertTrue(directions.allSatisfy {
+            simd_dot($0, SIMD3(0, 1, 0)) >= minimumConeDot - 0.000_01
+        })
+        XCTAssertTrue(directions.contains { simd_dot($0, SIMD3(0, 1, 0)) < 0.999 })
+        XCTAssertTrue(directions.dropFirst().contains { simd_distance($0, directions[0]) > 0.001 })
+    }
+
+    func testEmissionRateControlsDormantActivationOverFixedInterval() throws {
+        let lowRateHarness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var lowRate = SimulationParameters.default
+        lowRate.emissionRate = 1_000
+        try lowRateHarness.initializeParticles(parameters: lowRate)
+        try lowRateHarness.updateParticles(delta: 0.004)
+
+        let highRateHarness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var highRate = SimulationParameters.default
+        highRate.emissionRate = 500_000
+        try highRateHarness.initializeParticles(parameters: highRate)
+        try highRateHarness.updateParticles(delta: 0.004)
+
+        let lowRateParticles = try lowRateHarness.readParticles()
+        let highRateParticles = try highRateHarness.readParticles()
+        let lowRateAlive = lowRateParticles.filter { $0.age >= 0 }.count
+        let highRateAlive = highRateParticles.filter { $0.age >= 0 }.count
+        XCTAssertLessThan(lowRateAlive, highRateAlive)
+        XCTAssertTrue(lowRateParticles.contains { $0.isDormant })
+        XCTAssertEqual(highRateAlive, 64)
+    }
+
+    func testEmissionRateControlsExpiredParticleRecycling() throws {
+        let lowRateHarness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var lowRate = SimulationParameters.default
+        lowRate.emissionRate = 1_000
+        lowRateHarness.setParticleParameters(lowRate)
+        try lowRateHarness.seedExpiredParticles()
+        try lowRateHarness.updateParticles(delta: 1.0 / 60.0)
+
+        let highRateHarness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        var highRate = SimulationParameters.default
+        highRate.emissionRate = 500_000
+        highRateHarness.setParticleParameters(highRate)
+        try highRateHarness.seedExpiredParticles()
+        try highRateHarness.updateParticles(delta: 1.0 / 60.0)
+
+        let lowRateAlive = try lowRateHarness.readParticles().filter { $0.age >= 0 }.count
+        let highRateAlive = try highRateHarness.readParticles().filter { $0.age >= 0 }.count
+        XCTAssertLessThan(lowRateAlive, highRateAlive)
+        XCTAssertGreaterThan(lowRateAlive, 0)
+        XCTAssertEqual(highRateAlive, 64)
+    }
+
     func testExpiredParticlesRespawnInsideEmitter() throws {
         let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
         try harness.seedExpiredParticles()
@@ -112,6 +233,46 @@ final class MetalKernelTests: XCTestCase {
         XCTAssertEqual(solver.stepState, initialState)
     }
 
+    func testParticleEncoderFailureDoesNotPublishFluidStepState() throws {
+        let context = try MetalContext()
+        let solver = try FluidSolver(
+            context: context,
+            gridAxis: 8,
+            storageMode: .shared
+        )
+        let gate = EncoderCreationGate(successesBeforeFailure: 0)
+        let particleSystem = try ParticleSystem(
+            context: context,
+            updateEncoderFactory: gate.makeEncoder
+        )
+        let initialFluidState = solver.stepState
+        let originalParticleBuffer = particleSystem.currentBuffer
+        let commandBuffer = try XCTUnwrap(context.queue.makeCommandBuffer())
+        let uniforms = quiescentUniforms(gridAxis: 8)
+
+        let pendingFluidState = try solver.encodeStep(
+            commandBuffer: commandBuffer,
+            uniforms: uniforms,
+            force: .inactive
+        )
+        XCTAssertNotEqual(pendingFluidState, initialFluidState)
+        XCTAssertThrowsError(
+            try particleSystem.encodeUpdate(
+                commandBuffer: commandBuffer,
+                velocityTexture: solver.velocityTexture(for: pendingFluidState),
+                uniforms: uniforms
+            )
+        ) { error in
+            guard case RendererError.commandEncoding("particle update") = error else {
+                return XCTFail("Unexpected error: \(error)")
+            }
+        }
+
+        XCTAssertEqual(solver.stepState, initialFluidState)
+        XCTAssertTrue(originalParticleBuffer === particleSystem.currentBuffer)
+        XCTAssertEqual(commandBuffer.status, .notEnqueued)
+    }
+
     func testRepeatedAsymmetricBoundaryStepsStayFiniteAndProjected() throws {
         let context = try MetalContext()
         let solver = try FluidSolver(
@@ -126,11 +287,12 @@ final class MetalKernelTests: XCTestCase {
 
         for _ in 0..<16 {
             let commandBuffer = try XCTUnwrap(context.queue.makeCommandBuffer())
-            try solver.encodeStep(
+            let pendingState = try solver.encodeStep(
                 commandBuffer: commandBuffer,
                 uniforms: uniforms,
                 force: .inactive
             )
+            solver.publishStep(pendingState)
             commandBuffer.commit()
             commandBuffer.waitUntilCompleted()
             XCTAssertEqual(commandBuffer.status, .completed)
@@ -213,6 +375,7 @@ private final class MetalTestHarness {
     private var velocityTextures: [MTLTexture]
     private var pressureTextures: [MTLTexture]
     private let divergenceTexture: MTLTexture
+    private let initializeParticlesPipeline: MTLComputePipelineState?
     private let updateParticlesPipeline: MTLComputePipelineState?
     private let particleBuffer: MTLBuffer?
     private let particleCount: Int
@@ -248,12 +411,17 @@ private final class MetalTestHarness {
             axis: gridAxis
         )
         if particleCount > 0 {
+            initializeParticlesPipeline = try Self.pipeline(
+                named: "initializeParticles",
+                context: self.context
+            )
             updateParticlesPipeline = try Self.pipeline(named: "updateParticles", context: self.context)
             particleBuffer = self.context.device.makeBuffer(
                 length: particleCount * MemoryLayout<GPUParticle>.stride,
                 options: .storageModeShared
             )
         } else {
+            initializeParticlesPipeline = nil
             updateParticlesPipeline = nil
             particleBuffer = nil
         }
@@ -266,6 +434,46 @@ private final class MetalTestHarness {
         )
         let axis = UInt32(gridAxis)
         uniforms.gridSize = SIMD4(axis, axis, axis, 0)
+    }
+
+    func initializeParticles(parameters: SimulationParameters) throws {
+        guard let initializeParticlesPipeline, let particleBuffer else {
+            throw MetalHarnessError.resourceAllocation("particle resources")
+        }
+        setParticleParameters(parameters)
+        var initialization = SIMD4<UInt32>(0x4e_46_47_31, UInt32(particleCount), 0, 0)
+        guard
+            let initializationBuffer = context.device.makeBuffer(
+                bytes: &initialization,
+                length: MemoryLayout<SIMD4<UInt32>>.stride,
+                options: .storageModeShared
+            ),
+            let commandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else {
+            throw MetalHarnessError.commandEncoding
+        }
+        encoder.setComputePipelineState(initializeParticlesPipeline)
+        encoder.setBuffer(particleBuffer, offset: 0, index: 0)
+        encoder.setBuffer(initializationBuffer, offset: 0, index: 1)
+        setUniforms(on: encoder, index: 2)
+        dispatchParticles(encoder: encoder, pipeline: initializeParticlesPipeline)
+        encoder.endEncoding()
+        try commitAndWait(commandBuffer)
+    }
+
+    func setParticleParameters(_ parameters: SimulationParameters) {
+        uniforms = GPUUniforms(
+            parameters: parameters,
+            schedule: StepSchedule(stepCount: 1, stepDelta: uniforms.deltaAndTime.x),
+            elapsedTime: uniforms.deltaAndTime.y,
+            frameIndex: uniforms.particleCounts.z,
+            particleCapacity: particleCount
+        )
+        let axis = UInt32(gridAxis)
+        uniforms.gridSize = SIMD4(axis, axis, axis, 0)
+        uniforms.particleCounts.x = UInt32(particleCount)
+        uniforms.particleCounts.y = UInt32(particleCount)
     }
 
     func seedExpiredParticles() throws {

@@ -9,6 +9,7 @@ struct GPUUniforms {
     float4 emitterPositionRadius;
     float4 emitterDirectionSpeed;
     uint4 particleCounts;
+    float4 particleBehavior;
 };
 
 struct InteractionForce {
@@ -23,7 +24,7 @@ struct GPUParticle {
     float4 velocitySeed;
 };
 
-static_assert(sizeof(GPUUniforms) == 112, "GPUUniforms ABI must match Swift");
+static_assert(sizeof(GPUUniforms) == 128, "GPUUniforms ABI must match Swift");
 static_assert(sizeof(InteractionForce) == 48, "InteractionForce ABI must match Swift");
 static_assert(sizeof(GPUParticle) == 48, "GPUParticle ABI must match Swift");
 
