@@ -97,22 +97,74 @@ static GPUParticle dormantParticle(
     return particle;
 }
 
-static bool emissionPhaseCrossed(
-    uint seed,
-    uint particleIndex,
+static float emissionCycle(
     uint activeCount,
     constant GPUUniforms& u
 ) {
     float rate = max(u.particleBehavior.z, 1.0f);
-    float cycle = float(max(activeCount, 1u)) / rate;
-    float phase = (
+    return float(max(activeCount, 1u)) / rate;
+}
+
+static float emissionPhase(
+    uint seed,
+    uint particleIndex,
+    constant GPUUniforms& u
+) {
+    float rate = max(u.particleBehavior.z, 1.0f);
+    return (
         float(particleIndex) + particleRandom(seed ^ 0x85ebca6bu)
     ) / rate;
-    float intervalEnd = max(u.deltaAndTime.y, 0.0f);
-    float intervalStart = max(intervalEnd - max(u.deltaAndTime.x, 0.0f), 0.0f);
-    float previousCycle = floor((intervalStart - phase) / cycle);
-    float currentCycle = floor((intervalEnd - phase) / cycle);
-    return currentCycle > previousCycle;
+}
+
+static float nextEmissionTimeAfter(
+    uint seed,
+    uint particleIndex,
+    uint activeCount,
+    float time,
+    constant GPUUniforms& u
+) {
+    float cycle = emissionCycle(activeCount, u);
+    float phase = emissionPhase(seed, particleIndex, u);
+    float cycleIndex = floor((time - phase) / cycle) + 1.0f;
+    float eventTime = phase + cycleIndex * cycle;
+    if (eventTime <= time) eventTime += cycle;
+    return eventTime;
+}
+
+static GPUParticle integrateParticle(
+    GPUParticle particle,
+    float duration,
+    uint seed,
+    texture3d<half, access::sample> velocityTexture,
+    constant GPUUniforms& u
+) {
+    if (duration <= 0.0f) return particle;
+
+    float3 position = particle.positionAge.xyz;
+    float age = particle.positionAge.w;
+    float lifetime = particle.previousPositionLifetime.w;
+    float3 particleVelocity = particle.velocitySeed.xyz;
+    constexpr sampler velocitySampler(coord::normalized, address::clamp_to_edge, filter::linear);
+    float3 coordinate = position * 0.5f + 0.5f;
+    float3 fluidVelocity = float3(velocityTexture.sample(velocitySampler, coordinate).xyz);
+    if (!all(isfinite(fluidVelocity))) fluidVelocity = float3(0.0f);
+    float dragBlend = 1.0f - exp(-max(u.particleBehavior.w, 0.0f) * duration);
+    particleVelocity = mix(particleVelocity, fluidVelocity, saturate(dragBlend));
+    particleVelocity.y -= max(u.forces.x, 0.0f) * duration;
+    float3 nextPosition = position + particleVelocity * duration;
+    float nextAge = age + duration;
+
+    bool invalidUpdate = !all(isfinite(nextPosition))
+        || !all(isfinite(particleVelocity))
+        || !isfinite(nextAge);
+    if (invalidUpdate || nextAge >= lifetime || any(abs(nextPosition) > 1.0f)) {
+        return dormantParticle(seed, u);
+    }
+
+    particle.previousPositionLifetime.xyz = position;
+    particle.positionAge = float4(nextPosition, nextAge);
+    particle.velocitySeed.xyz = particleVelocity;
+    return particle;
 }
 
 kernel void initializeParticles(
@@ -168,9 +220,25 @@ kernel void updateParticles(
     uint seed = finiteSeed
         ? uint(abs(storedSeed))
         : ((particleHash(gid + 1u) & 0x00ffffffu) | 1u);
+    float intervalEnd = max(u.deltaAndTime.y, 0.0f);
+    float intervalStart = max(intervalEnd - dt, 0.0f);
     if (finiteParticle && age < 0.0f) {
-        if (emissionPhaseCrossed(seed, gid, activeCount, u)) {
-            particles[gid] = respawnParticle(seed, u);
+        float eventTime = nextEmissionTimeAfter(
+            seed,
+            gid,
+            activeCount,
+            intervalStart,
+            u
+        );
+        if (eventTime <= intervalEnd) {
+            GPUParticle respawned = respawnParticle(seed, u);
+            particles[gid] = integrateParticle(
+                respawned,
+                intervalEnd - eventTime,
+                seed,
+                velocityTexture,
+                u
+            );
         } else {
             particle.positionAge.w = -1.0f;
             particle.previousPositionLifetime.w = max(u.particleBehavior.x, 0.5f);
@@ -183,26 +251,35 @@ kernel void updateParticles(
         return;
     }
 
-    constexpr sampler velocitySampler(coord::normalized, address::clamp_to_edge, filter::linear);
-    float3 coordinate = position * 0.5f + 0.5f;
-    float3 fluidVelocity = float3(velocityTexture.sample(velocitySampler, coordinate).xyz);
-    if (!all(isfinite(fluidVelocity))) fluidVelocity = float3(0.0f);
-    float dragBlend = 1.0f - exp(-max(u.particleBehavior.w, 0.0f) * dt);
-    particleVelocity = mix(particleVelocity, fluidVelocity, saturate(dragBlend));
-    particleVelocity.y -= max(u.forces.x, 0.0f) * dt;
-    float3 nextPosition = position + particleVelocity * dt;
-    float nextAge = age + dt;
-
-    bool invalidUpdate = !all(isfinite(nextPosition))
-        || !all(isfinite(particleVelocity))
-        || !isfinite(nextAge);
-    if (invalidUpdate || nextAge >= lifetime || any(abs(nextPosition) > 1.0f)) {
+    float deathOffset = lifetime - age;
+    if (deathOffset <= dt) {
+        float deathTime = intervalStart + max(deathOffset, 0.0f);
+        float cycle = emissionCycle(activeCount, u);
+        float respawnTime = cycle <= lifetime
+            ? deathTime
+            : nextEmissionTimeAfter(seed, gid, activeCount, deathTime, u);
+        if (respawnTime <= intervalEnd) {
+            GPUParticle respawned = respawnParticle(seed, u);
+            // Production dt is at most 1/60 and validated lifetime is at least
+            // 0.5 seconds, so one expiry/respawn event per update is sufficient.
+            particles[gid] = integrateParticle(
+                respawned,
+                intervalEnd - respawnTime,
+                seed,
+                velocityTexture,
+                u
+            );
+            return;
+        }
         particles[gid] = dormantParticle(seed, u);
         return;
     }
 
-    particle.previousPositionLifetime.xyz = position;
-    particle.positionAge = float4(nextPosition, nextAge);
-    particle.velocitySeed.xyz = particleVelocity;
-    particles[gid] = particle;
+    particles[gid] = integrateParticle(
+        particle,
+        dt,
+        seed,
+        velocityTexture,
+        u
+    );
 }
