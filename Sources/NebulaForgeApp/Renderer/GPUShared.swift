@@ -1,4 +1,5 @@
 import NebulaForgeCore
+import simd
 
 struct GPUUniforms {
     var gridSize: SIMD4<UInt32>
@@ -93,4 +94,10 @@ struct GPUParticle {
     /// Task 7 must skip particles with negative age. Dormancy is a sentinel;
     /// emission eligibility is recomputed from absolute simulation time.
     var isDormant: Bool { age < 0 }
+}
+
+struct ParticleRenderUniforms {
+    var viewProjection: simd_float4x4
+    var viewportAndSize: SIMD4<Float>
+    var paletteAndCount: SIMD4<UInt32>
 }

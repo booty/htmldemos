@@ -24,9 +24,16 @@ struct GPUParticle {
     float4 velocitySeed;
 };
 
+struct ParticleRenderUniforms {
+    float4x4 viewProjection;
+    float4 viewportAndSize;
+    uint4 paletteAndCount;
+};
+
 static_assert(sizeof(GPUUniforms) == 128, "GPUUniforms ABI must match Swift");
 static_assert(sizeof(InteractionForce) == 48, "InteractionForce ABI must match Swift");
 static_assert(sizeof(GPUParticle) == 48, "GPUParticle ABI must match Swift");
+static_assert(sizeof(ParticleRenderUniforms) == 96, "ParticleRenderUniforms ABI must match Swift");
 
 struct FullscreenOut { float4 position [[position]]; float2 uv; };
 

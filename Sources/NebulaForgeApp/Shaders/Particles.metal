@@ -283,3 +283,166 @@ kernel void updateParticles(
         u
     );
 }
+
+struct ParticleVertexOut {
+    float4 position [[position]];
+    float2 spriteUV;
+    float speed;
+    float ageFraction;
+    float depth;
+    float velocityColorMix;
+    uint paletteIndex [[flat]];
+    float active [[flat]];
+};
+
+static float3 paletteColor(
+    float speed,
+    float ageFraction,
+    uint paletteIndex,
+    float velocityColorMix
+) {
+    float palettePosition = saturate(mix(
+        1.0f - ageFraction,
+        speed,
+        velocityColorMix
+    ));
+    float3 low;
+    float3 middle;
+    float3 high;
+
+    switch (min(paletteIndex, 3u)) {
+    case 1u:
+        low = float3(0.05f, 0.35f, 0.65f);
+        middle = float3(0.10f, 1.75f, 1.20f);
+        high = float3(1.35f, 0.45f, 2.50f);
+        break;
+    case 2u:
+        low = float3(0.15f, 0.20f, 1.20f);
+        middle = float3(2.20f, 0.20f, 0.45f);
+        high = float3(4.00f, 2.20f, 0.55f);
+        break;
+    case 3u:
+        low = float3(0.03f, 0.02f, 0.20f);
+        middle = float3(0.35f, 0.08f, 1.20f);
+        high = float3(1.60f, 0.35f, 2.80f);
+        break;
+    default:
+        low = float3(0.35f, 0.04f, 0.02f);
+        middle = float3(2.20f, 0.35f, 0.03f);
+        high = float3(4.00f, 2.40f, 0.55f);
+        break;
+    }
+
+    float3 color = palettePosition < 0.5f
+        ? mix(low, middle, smoothstep(0.0f, 0.5f, palettePosition))
+        : mix(middle, high, smoothstep(0.5f, 1.0f, palettePosition));
+    return color * mix(0.75f, 1.35f, speed);
+}
+
+vertex ParticleVertexOut particleVertex(
+    uint vertexID [[vertex_id]],
+    uint instanceID [[instance_id]],
+    device const GPUParticle* particles [[buffer(0)]],
+    constant ParticleRenderUniforms& u [[buffer(1)]]
+) {
+    ParticleVertexOut out;
+    out.position = float4(2.0f, 2.0f, 2.0f, 1.0f);
+    out.spriteUV = float2(0.0f);
+    out.speed = 0.0f;
+    out.ageFraction = 1.0f;
+    out.depth = 1.0f;
+    out.velocityColorMix = saturate(u.viewportAndSize.w);
+    out.paletteIndex = min(u.paletteAndCount.x, 3u);
+    out.active = 0.0f;
+
+    if (instanceID >= u.paletteAndCount.y) return out;
+    GPUParticle particle = particles[instanceID];
+    float age = particle.positionAge.w;
+    float lifetime = particle.previousPositionLifetime.w;
+    bool finiteParticle = all(isfinite(particle.positionAge))
+        && all(isfinite(particle.previousPositionLifetime))
+        && all(isfinite(particle.velocitySeed));
+    if (!finiteParticle || age < 0.0f || lifetime <= 0.0f || age >= lifetime) {
+        return out;
+    }
+
+    float4 currentClip = u.viewProjection * float4(particle.positionAge.xyz, 1.0f);
+    float4 previousClip = u.viewProjection
+        * float4(particle.previousPositionLifetime.xyz, 1.0f);
+    if (
+        !all(isfinite(currentClip))
+        || !all(isfinite(previousClip))
+        || currentClip.w <= 1.0e-5f
+        || previousClip.w <= 1.0e-5f
+    ) {
+        return out;
+    }
+
+    float2 viewport = max(u.viewportAndSize.xy, float2(1.0f));
+    float2 currentNDC = currentClip.xy / currentClip.w;
+    float2 previousNDC = previousClip.xy / previousClip.w;
+    float2 projectedDeltaPixels = (currentNDC - previousNDC) * viewport * 0.5f;
+    float projectedLength = length(projectedDeltaPixels);
+    float2 tangent = projectedLength > 1.0e-5f
+        ? projectedDeltaPixels / projectedLength
+        : float2(0.0f, 1.0f);
+    float2 normal = float2(-tangent.y, tangent.x);
+    float speed = saturate(length(particle.velocitySeed.xyz) / 4.0f);
+    float spriteSize = max(u.viewportAndSize.z, 0.25f);
+    float streakLength = spriteSize * mix(1.5f, 8.0f, speed)
+        + min(projectedLength, spriteSize * 4.0f);
+    const float2 corners[4] = {
+        float2(-1.0f, -1.0f),
+        float2( 1.0f, -1.0f),
+        float2(-1.0f,  1.0f),
+        float2( 1.0f,  1.0f)
+    };
+    float2 corner = corners[vertexID];
+    float alongPixels = (corner.x - 1.0f) * 0.5f * streakLength;
+    float acrossPixels = corner.y * spriteSize * 0.5f;
+    float2 ndcOffset = (
+        tangent * alongPixels + normal * acrossPixels
+    ) * 2.0f / viewport;
+
+    out.position = currentClip;
+    out.position.xy += ndcOffset * currentClip.w;
+    out.spriteUV = corner;
+    out.speed = speed;
+    out.ageFraction = saturate(age / lifetime);
+    out.depth = currentClip.z / currentClip.w;
+    out.active = 1.0f;
+    return out;
+}
+
+fragment half4 particleFragment(ParticleVertexOut in [[stage_in]]) {
+    if (in.active < 0.5f) discard_fragment();
+    float r2 = dot(in.spriteUV, in.spriteUV);
+    if (r2 >= 1.0f) discard_fragment();
+    float alpha = smoothstep(1.0f, 0.1f, r2)
+        * (1.0f - 0.35f * in.ageFraction);
+    float3 color = paletteColor(
+        in.speed,
+        in.ageFraction,
+        in.paletteIndex,
+        in.velocityColorMix
+    );
+    return half4(half3(color * alpha), half(alpha));
+}
+
+fragment half4 particleDisplayFragment(
+    FullscreenOut in [[stage_in]],
+    texture2d<half, access::sample> hdrTexture [[texture(0)]]
+) {
+    constexpr sampler displaySampler(
+        coord::normalized,
+        address::clamp_to_edge,
+        filter::linear
+    );
+    half3 hdrColor = max(
+        hdrTexture.sample(displaySampler, in.uv).rgb,
+        half3(0.0h)
+    );
+    // Task 8 replaces this display-only clamp with bloom and tone mapping.
+    half3 background = half3(0.01h, 0.005h, 0.04h);
+    return half4(min(hdrColor + background, half3(1.0h)), 1.0h);
+}
