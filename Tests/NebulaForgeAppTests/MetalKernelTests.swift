@@ -5,6 +5,39 @@ import simd
 @testable import NebulaForgeApp
 
 final class MetalKernelTests: XCTestCase {
+    func testExpiredParticlesRespawnInsideEmitter() throws {
+        let harness = try MetalTestHarness(gridAxis: 8, particleCount: 64)
+        try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
+        let firstRespawn = try harness.readParticles()
+
+        try harness.seedExpiredParticles()
+        try harness.updateParticles(delta: 1.0 / 60.0)
+        let secondRespawn = try harness.readParticles()
+
+        for (first, second) in zip(firstRespawn, secondRespawn) {
+            XCTAssertEqual(first.positionAge, second.positionAge)
+            XCTAssertEqual(first.previousPositionLifetime, second.previousPositionLifetime)
+            XCTAssertEqual(first.velocitySeed, second.velocitySeed)
+        }
+
+        for particle in firstRespawn {
+            XCTAssertTrue(particle.positionAge.x.isFinite)
+            XCTAssertTrue(particle.positionAge.y.isFinite)
+            XCTAssertTrue(particle.positionAge.z.isFinite)
+            XCTAssertTrue(particle.age.isFinite)
+            XCTAssertTrue(particle.lifetime.isFinite)
+            XCTAssertTrue(particle.velocitySeed.x.isFinite)
+            XCTAssertTrue(particle.velocitySeed.y.isFinite)
+            XCTAssertTrue(particle.velocitySeed.z.isFinite)
+            XCTAssertTrue(particle.velocitySeed.w.isFinite)
+            XCTAssertGreaterThanOrEqual(particle.age, 0)
+            XCTAssertLessThan(particle.age, particle.lifetime)
+            XCTAssertLessThanOrEqual(simd_length(particle.position), 0.120_001)
+            XCTAssertLessThanOrEqual(simd_length(particle.position), 1.0)
+        }
+    }
+
     func testProductionFluidResourcesStayPrivateAndResizeOnlyForAxisChanges() throws {
         let context = try MetalContext()
         let solver = try FluidSolver(context: context, gridAxis: .n48)
@@ -180,17 +213,21 @@ private final class MetalTestHarness {
     private var velocityTextures: [MTLTexture]
     private var pressureTextures: [MTLTexture]
     private let divergenceTexture: MTLTexture
+    private let updateParticlesPipeline: MTLComputePipelineState?
+    private let particleBuffer: MTLBuffer?
+    private let particleCount: Int
     private var velocityIndex = 0
     private var pressureIndex = 0
     private var uniforms: GPUUniforms
 
-    init(context: MetalContext? = nil, gridAxis: Int) throws {
+    init(context: MetalContext? = nil, gridAxis: Int, particleCount: Int = 0) throws {
         if let context {
             self.context = context
         } else {
             self.context = try MetalContext()
         }
         self.gridAxis = gridAxis
+        self.particleCount = particleCount
         computeDivergencePipeline = try Self.pipeline(named: "computeDivergence", context: self.context)
         jacobiPressurePipeline = try Self.pipeline(named: "jacobiPressure", context: self.context)
         subtractPressureGradientPipeline = try Self.pipeline(
@@ -210,6 +247,16 @@ private final class MetalTestHarness {
             format: .r16Float,
             axis: gridAxis
         )
+        if particleCount > 0 {
+            updateParticlesPipeline = try Self.pipeline(named: "updateParticles", context: self.context)
+            particleBuffer = self.context.device.makeBuffer(
+                length: particleCount * MemoryLayout<GPUParticle>.stride,
+                options: .storageModeShared
+            )
+        } else {
+            updateParticlesPipeline = nil
+            particleBuffer = nil
+        }
         uniforms = GPUUniforms(
             parameters: .default,
             schedule: StepSchedule(stepCount: 1, stepDelta: 1.0 / 60.0),
@@ -219,6 +266,56 @@ private final class MetalTestHarness {
         )
         let axis = UInt32(gridAxis)
         uniforms.gridSize = SIMD4(axis, axis, axis, 0)
+    }
+
+    func seedExpiredParticles() throws {
+        guard let particleBuffer else {
+            throw MetalHarnessError.resourceAllocation("particle buffer")
+        }
+        let particles = particleBuffer.contents().bindMemory(
+            to: GPUParticle.self,
+            capacity: particleCount
+        )
+        for index in 0..<particleCount {
+            particles[index] = GPUParticle(
+                positionAge: SIMD4(0, 0, 0, 2),
+                previousPositionLifetime: SIMD4(0, 0, 0, 1),
+                velocitySeed: SIMD4(0, 0, 0, Float(index + 1))
+            )
+        }
+    }
+
+    func updateParticles(delta: Float) throws {
+        guard let updateParticlesPipeline, let particleBuffer else {
+            throw MetalHarnessError.resourceAllocation("particle resources")
+        }
+        uniforms.deltaAndTime.x = delta
+        uniforms.particleCounts.x = UInt32(particleCount)
+        uniforms.particleCounts.y = UInt32(particleCount)
+        guard
+            let commandBuffer = context.queue.makeCommandBuffer(),
+            let encoder = commandBuffer.makeComputeCommandEncoder()
+        else {
+            throw MetalHarnessError.commandEncoding
+        }
+        encoder.setComputePipelineState(updateParticlesPipeline)
+        encoder.setBuffer(particleBuffer, offset: 0, index: 0)
+        encoder.setTexture(velocityTextures[velocityIndex], index: 0)
+        setUniforms(on: encoder, index: 1)
+        dispatchParticles(encoder: encoder, pipeline: updateParticlesPipeline)
+        encoder.endEncoding()
+        try commitAndWait(commandBuffer)
+    }
+
+    func readParticles() throws -> [GPUParticle] {
+        guard let particleBuffer else {
+            throw MetalHarnessError.resourceAllocation("particle buffer")
+        }
+        let particles = particleBuffer.contents().bindMemory(
+            to: GPUParticle.self,
+            capacity: particleCount
+        )
+        return Array(UnsafeBufferPointer(start: particles, count: particleCount))
     }
 
     func seedRadialVelocity() throws {
@@ -380,9 +477,20 @@ private final class MetalTestHarness {
         encoder.endEncoding()
     }
 
-    private func setUniforms(on encoder: MTLComputeCommandEncoder) {
+    private func setUniforms(on encoder: MTLComputeCommandEncoder, index: Int = 0) {
         var uniforms = uniforms
-        encoder.setBytes(&uniforms, length: MemoryLayout<GPUUniforms>.stride, index: 0)
+        encoder.setBytes(&uniforms, length: MemoryLayout<GPUUniforms>.stride, index: index)
+    }
+
+    private func dispatchParticles(
+        encoder: MTLComputeCommandEncoder,
+        pipeline: MTLComputePipelineState
+    ) {
+        let width = min(pipeline.threadExecutionWidth, pipeline.maxTotalThreadsPerThreadgroup)
+        encoder.dispatchThreads(
+            MTLSize(width: particleCount, height: 1, depth: 1),
+            threadsPerThreadgroup: MTLSize(width: width, height: 1, depth: 1)
+        )
     }
 
     private func dispatch(

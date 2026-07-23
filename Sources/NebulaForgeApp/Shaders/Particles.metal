@@ -1,0 +1,130 @@
+#include <metal_stdlib>
+using namespace metal;
+
+static uint particleHash(uint value) {
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+static float particleRandom(uint value) {
+    return float(particleHash(value) & 0x00ffffffu) / float(0x01000000u);
+}
+
+static float3 deterministicUnitBall(uint seed) {
+    float3 direction = float3(
+        particleRandom(seed ^ 0x68bc21ebu) * 2.0f - 1.0f,
+        particleRandom(seed ^ 0x02e5be93u) * 2.0f - 1.0f,
+        particleRandom(seed ^ 0x967a889bu) * 2.0f - 1.0f
+    );
+    float directionLength = length(direction);
+    if (!isfinite(directionLength) || directionLength < 1.0e-5f) {
+        direction = float3(0.0f, 1.0f, 0.0f);
+    } else {
+        direction /= directionLength;
+    }
+    float radius = pow(particleRandom(seed ^ 0x368cc8b7u), 1.0f / 3.0f);
+    return direction * radius;
+}
+
+static GPUParticle respawnParticle(
+    uint seed,
+    constant GPUUniforms& u
+) {
+    uint respawnSeed = particleHash(seed ^ (u.particleCounts.z * 0x9e3779b9u));
+    float3 offset = deterministicUnitBall(respawnSeed) * max(u.emitterPositionRadius.w, 0.0f);
+    float3 position = clamp(u.emitterPositionRadius.xyz + offset, -1.0f, 1.0f);
+    float3 direction = u.emitterDirectionSpeed.xyz;
+    float directionLength = length(direction);
+    direction = directionLength > 1.0e-5f
+        ? direction / directionLength
+        : float3(0.0f, 1.0f, 0.0f);
+    float3 velocity = direction * max(u.emitterDirectionSpeed.w, 0.0f);
+    float lifetime = 4.0f + 6.0f * particleRandom(respawnSeed ^ 0x5bf03635u);
+
+    GPUParticle particle;
+    particle.positionAge = float4(position, 0.0f);
+    particle.previousPositionLifetime = float4(position, lifetime);
+    particle.velocitySeed = float4(velocity, float(seed));
+    return particle;
+}
+
+kernel void initializeParticles(
+    device GPUParticle* particles [[buffer(0)]],
+    constant uint4& initialization [[buffer(1)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    uint capacity = initialization.y;
+    if (gid >= capacity) return;
+
+    uint seed = (particleHash(gid ^ initialization.x) & 0x00ffffffu) | 1u;
+    float3 position = deterministicUnitBall(seed) * 0.1f;
+    float lifetime = 4.0f + 6.0f * particleRandom(seed ^ 0x5bf03635u);
+    float age = particleRandom(seed ^ 0x1b56c4e9u) * lifetime;
+
+    GPUParticle particle;
+    particle.positionAge = float4(position, age);
+    particle.previousPositionLifetime = float4(position, lifetime);
+    particle.velocitySeed = float4(0.0f, 0.0f, 0.0f, float(seed));
+    particles[gid] = particle;
+}
+
+kernel void updateParticles(
+    device GPUParticle* particles [[buffer(0)]],
+    texture3d<half, access::sample> velocityTexture [[texture(0)]],
+    constant GPUUniforms& u [[buffer(1)]],
+    uint gid [[thread_position_in_grid]]
+) {
+    uint activeCount = min(u.particleCounts.x, u.particleCounts.y);
+    if (gid >= activeCount || gid >= u.particleCounts.y) return;
+
+    GPUParticle particle = particles[gid];
+    float3 position = particle.positionAge.xyz;
+    float age = particle.positionAge.w;
+    float lifetime = particle.previousPositionLifetime.w;
+    float3 particleVelocity = particle.velocitySeed.xyz;
+    float storedSeed = particle.velocitySeed.w;
+    bool finiteSeed = isfinite(storedSeed)
+        && abs(storedSeed) >= 1.0f
+        && abs(storedSeed) <= float(0x00ffffffu);
+    bool finiteParticle = all(isfinite(position))
+        && isfinite(age)
+        && isfinite(lifetime)
+        && all(isfinite(particleVelocity))
+        && finiteSeed;
+    bool outsideDomain = any(abs(position) > 1.0f);
+    uint seed = finiteSeed
+        ? uint(abs(storedSeed))
+        : ((particleHash(gid + 1u) & 0x00ffffffu) | 1u);
+    if (!finiteParticle || lifetime <= 0.0f || age >= lifetime || outsideDomain) {
+        particles[gid] = respawnParticle(seed, u);
+        return;
+    }
+
+    constexpr sampler velocitySampler(coord::normalized, address::clamp_to_edge, filter::linear);
+    float dt = max(u.deltaAndTime.x, 0.0f);
+    float3 coordinate = position * 0.5f + 0.5f;
+    float3 fluidVelocity = float3(velocityTexture.sample(velocitySampler, coordinate).xyz);
+    if (!all(isfinite(fluidVelocity))) fluidVelocity = float3(0.0f);
+    float dragBlend = 1.0f - exp(-max(u.turbulence.w, 0.0f) * dt);
+    particleVelocity = mix(particleVelocity, fluidVelocity, saturate(dragBlend));
+    particleVelocity.y -= max(u.forces.x, 0.0f) * dt;
+    float3 nextPosition = position + particleVelocity * dt;
+    float nextAge = age + dt;
+
+    bool invalidUpdate = !all(isfinite(nextPosition))
+        || !all(isfinite(particleVelocity))
+        || !isfinite(nextAge);
+    if (invalidUpdate || nextAge >= lifetime || any(abs(nextPosition) > 1.0f)) {
+        particles[gid] = respawnParticle(seed, u);
+        return;
+    }
+
+    particle.previousPositionLifetime.xyz = position;
+    particle.positionAge = float4(nextPosition, nextAge);
+    particle.velocitySeed.xyz = particleVelocity;
+    particles[gid] = particle;
+}

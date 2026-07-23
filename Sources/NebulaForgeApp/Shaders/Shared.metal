@@ -17,8 +17,15 @@ struct InteractionForce {
     uint4 modeAndPadding;
 };
 
+struct GPUParticle {
+    float4 positionAge;
+    float4 previousPositionLifetime;
+    float4 velocitySeed;
+};
+
 static_assert(sizeof(GPUUniforms) == 112, "GPUUniforms ABI must match Swift");
 static_assert(sizeof(InteractionForce) == 48, "InteractionForce ABI must match Swift");
+static_assert(sizeof(GPUParticle) == 48, "GPUParticle ABI must match Swift");
 
 struct FullscreenOut { float4 position [[position]]; float2 uv; };
 

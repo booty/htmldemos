@@ -5,6 +5,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private let context: MetalContext
     private let diagnosticPipeline: MTLRenderPipelineState
     private let fluidSolver: FluidSolver
+    private let particleSystem: ParticleSystem
     private let timeStepper = TimeStepper()
     private var parameters = SimulationParameters.default
     private var lastFrameTime: TimeInterval?
@@ -34,6 +35,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             throw RendererError.pipeline("diagnostic render pipeline: \(error.localizedDescription)")
         }
         fluidSolver = try FluidSolver(context: context, gridAxis: parameters.fluidGridAxis)
+        particleSystem = try ParticleSystem(context: context)
         super.init()
     }
 
@@ -70,6 +72,11 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                     commandBuffer: simulationCommandBuffer,
                     uniforms: uniforms,
                     force: .inactive
+                )
+                try particleSystem.encodeUpdate(
+                    commandBuffer: simulationCommandBuffer,
+                    velocityTexture: fluidSolver.velocityTexture,
+                    uniforms: uniforms
                 )
             } catch let error as RendererError {
                 lastEncodingError = error

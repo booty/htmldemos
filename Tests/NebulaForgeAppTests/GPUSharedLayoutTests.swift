@@ -6,11 +6,13 @@ final class GPUSharedLayoutTests: XCTestCase {
     func testGPUUniformLayoutIsSixteenByteAligned() {
         XCTAssertEqual(MemoryLayout<GPUUniforms>.stride % 16, 0)
         XCTAssertEqual(MemoryLayout<InteractionForce>.stride % 16, 0)
+        XCTAssertEqual(MemoryLayout<GPUParticle>.stride % 16, 0)
     }
 
     func testGPUUniformLayoutMatchesMetalABI() {
         XCTAssertEqual(MemoryLayout<GPUUniforms>.stride, 112)
         XCTAssertEqual(MemoryLayout<InteractionForce>.stride, 48)
+        XCTAssertEqual(MemoryLayout<GPUParticle>.stride, 48)
     }
 
     func testGPUUniformFieldOffsetsMatchMetalABI() {
@@ -25,6 +27,10 @@ final class GPUSharedLayoutTests: XCTestCase {
         XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.positionRadius), 0)
         XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.directionStrength), 16)
         XCTAssertEqual(MemoryLayout<InteractionForce>.offset(of: \.modeAndPadding), 32)
+
+        XCTAssertEqual(MemoryLayout<GPUParticle>.offset(of: \.positionAge), 0)
+        XCTAssertEqual(MemoryLayout<GPUParticle>.offset(of: \.previousPositionLifetime), 16)
+        XCTAssertEqual(MemoryLayout<GPUParticle>.offset(of: \.velocitySeed), 32)
     }
 
     func testGPUUniformsPackValidatedSimulationInputs() {

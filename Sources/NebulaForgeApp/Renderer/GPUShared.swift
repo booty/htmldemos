@@ -69,3 +69,17 @@ struct InteractionForce {
         modeAndPadding: .zero
     )
 }
+
+struct GPUParticle {
+    var positionAge: SIMD4<Float>
+    var previousPositionLifetime: SIMD4<Float>
+    var velocitySeed: SIMD4<Float>
+
+    var position: SIMD3<Float> {
+        SIMD3(positionAge.x, positionAge.y, positionAge.z)
+    }
+
+    var age: Float { positionAge.w }
+
+    var lifetime: Float { previousPositionLifetime.w }
+}
