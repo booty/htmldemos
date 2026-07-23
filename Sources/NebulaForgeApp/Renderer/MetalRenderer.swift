@@ -11,6 +11,9 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     private var lastFrameTime: TimeInterval?
     private var elapsedTime: Float = 0
     private var frameIndex: UInt32 = 0
+    private let interactionLock = NSLock()
+    private var camera = Camera.default
+    private var interactionForce = InteractionForce.inactive
     private(set) var lastEncodingError: RendererError?
 
     init(context: MetalContext, colorPixelFormat: MTLPixelFormat) throws {
@@ -54,6 +57,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
             wallDelta: wallDelta,
             speed: parameters.simulationSpeed
         )
+        let force = interactionForceSnapshot()
         for step in 0..<schedule.stepCount {
             guard let simulationCommandBuffer = context.queue.makeCommandBuffer() else {
                 lastEncodingError = .commandEncoding("simulation command buffer")
@@ -73,7 +77,7 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
                 let pendingFluidState = try fluidSolver.encodeStep(
                     commandBuffer: simulationCommandBuffer,
                     uniforms: uniforms,
-                    force: .inactive
+                    force: force
                 )
                 try particleSystem.encodeUpdate(
                     commandBuffer: simulationCommandBuffer,
@@ -112,4 +116,30 @@ final class MetalRenderer: NSObject, MTKViewDelegate {
     }
 
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {}
+
+    func updateCamera(_ camera: Camera) {
+        interactionLock.lock()
+        self.camera = camera
+        interactionLock.unlock()
+    }
+
+    func updateInteractionForce(_ force: InteractionForce?) {
+        interactionLock.lock()
+        interactionForce = force ?? .inactive
+        interactionLock.unlock()
+    }
+
+    func cameraViewProjection(aspect: Float) -> simd_float4x4 {
+        interactionLock.lock()
+        let camera = camera
+        interactionLock.unlock()
+        return camera.viewProjection(aspect: aspect)
+    }
+
+    private func interactionForceSnapshot() -> InteractionForce {
+        interactionLock.lock()
+        let force = interactionForce
+        interactionLock.unlock()
+        return force
+    }
 }
