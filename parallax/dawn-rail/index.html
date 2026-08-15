@@ -1,0 +1,771 @@
+<!doctype html>
+<!-- All visual assets are original and generated procedurally in this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Dawn Rail — Flooded City / Green Horizon</title>
+  <style>
+    :root { color-scheme: dark; background: #070a12; }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; background: #070a12; }
+    body { display: grid; place-items: center; overflow-x: hidden; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    .stage { width: min(96vw, 960px); margin: 3vh auto; }
+    canvas { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; image-rendering: pixelated; image-rendering: crisp-edges; background: #0b1020; outline: 1px solid #314154; outline-offset: 5px; touch-action: none; }
+    canvas:focus-visible { outline: 2px solid #ffd27a; outline-offset: 7px; }
+    .fallback { margin-top: 1rem; padding: .8rem 1rem; border: 1px solid #4d6371; color: #d9e0b4; background: #111a2a; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  </style>
+</head>
+<body>
+  <main class="stage">
+    <canvas id="dawnRail" width="480" height="270" tabindex="0" role="img" aria-describedby="instructions" aria-label="A pixel-art commuter train window racing toward a sunrise over a flooded industrial city. Pointer movement changes the seat view; dragging vertically changes the shade; click or Space clears condensation."></canvas>
+    <p id="instructions" class="sr-only">Dawn Rail is an original procedural pixel-art graphics demo. Move horizontally to shift the seat and camera. Drag vertically or use Up and Down arrows to change the window shade and exposure. Click or press Space to clear circular condensation. Press Q to toggle reflection and bird quality, P to compare night, sunrise, and green-day palettes, and R to reset the sixty-second journey. The animation pauses while this tab is hidden and respects reduced-motion preferences.</p>
+    <p id="fallback" class="fallback" hidden>Your browser cannot create a 2D canvas. Open this file in a current browser with Canvas 2D support.</p>
+    <noscript><p class="fallback">JavaScript is required to animate this Canvas 2D demo. Enable it and reopen the file.</p></noscript>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+
+    const canvas = document.getElementById('dawnRail');
+    const fallback = document.getElementById('fallback');
+    const W = 480;
+    const H = 270;
+    const waterY = 174;
+    const viewport = { x: 18, y: 14, w: 444, h: 212 };
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    if (!ctx) {
+      fallback.hidden = false;
+      return;
+    }
+    ctx.imageSmoothingEnabled = false;
+
+    const skylineBuffer = document.createElement('canvas');
+    skylineBuffer.width = W;
+    skylineBuffer.height = H;
+    const skylineCtx = skylineBuffer.getContext('2d');
+    skylineCtx.imageSmoothingEnabled = false;
+    const reflectionBuffer = document.createElement('canvas');
+    reflectionBuffer.width = W;
+    reflectionBuffer.height = H;
+    const reflectionCtx = reflectionBuffer.getContext('2d');
+    reflectionCtx.imageSmoothingEnabled = false;
+
+    const reducedMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const motionFactor = reducedMotion ? 0.28 : 1;
+    const state = {
+      elapsed: 0,
+      seat: 0.5,
+      shade: 0.18,
+      condensation: 0.72,
+      clearPulse: 0,
+      qualityHigh: true,
+      autoLow: false,
+      paletteMode: null,
+      dragging: false,
+      dragMoved: false,
+      lastInput: 0,
+      paused: false,
+      frameSlow: 0
+    };
+
+    const NIGHT = {
+      skyTop: '#0b1020', skyMid: '#18243b', skyLow: '#29435b', horizon: '#4d6371',
+      ink: '#0a0e19', deep: '#111a2a', structure: '#243446', edge: '#4d6371',
+      water: '#14253a', waterHi: '#29435b', reflection: '#1f344c', cloud: '#26384f', star: '#d9e0b4',
+      sun: '#e45c4d', glow: '#f49a55', accent: '#e45c4d', text: '#d9e0b4',
+      leaf: '#294d43', farm: '#4d8268', foam: '#9aa98c'
+    };
+    const SUNRISE = {
+      skyTop: '#18243b', skyMid: '#e45c4d', skyLow: '#f49a55', horizon: '#ffd27a',
+      ink: '#24223a', deep: '#332b3a', structure: '#4d4b58', edge: '#9b6b68',
+      water: '#5c6670', waterHi: '#e08e73', reflection: '#9c6c70', cloud: '#7e6571', star: '#ffd27a',
+      sun: '#ffd27a', glow: '#f49a55', accent: '#e45c4d', text: '#ffe6a9',
+      leaf: '#355d4e', farm: '#668b66', foam: '#f3c98b'
+    };
+    const DAY = {
+      skyTop: '#99c27c', skyMid: '#d9e0b4', skyLow: '#d9e0b4', horizon: '#f0dda4',
+      ink: '#20343a', deep: '#294b47', structure: '#4d8268', edge: '#d9e0b4',
+      water: '#4d8268', waterHi: '#99c27c', reflection: '#5f9273', cloud: '#e8e7c1', star: '#d9e0b4',
+      sun: '#ffd27a', glow: '#d9e0b4', accent: '#e45c4d', text: '#f5f1c5',
+      leaf: '#294d43', farm: '#99c27c', foam: '#d9e0b4'
+    };
+
+    const STRIPS = {
+      towers: [
+        [8, 18, 60, 0], [35, 11, 92, 1], [54, 28, 47, 0], [90, 15, 74, 2],
+        [116, 29, 54, 0], [151, 12, 107, 1], [171, 24, 64, 0], [209, 18, 84, 2],
+        [244, 31, 52, 0], [285, 15, 115, 1], [309, 27, 70, 0], [349, 19, 95, 2],
+        [379, 33, 58, 0], [421, 13, 91, 1], [446, 25, 68, 0], [486, 21, 110, 2],
+        [525, 24, 50, 0], [564, 14, 80, 1], [592, 33, 64, 0]
+      ],
+      factories: [
+        [4, 44, 35, 0], [57, 27, 56, 1], [91, 45, 30, 2], [146, 35, 48, 0],
+        [196, 48, 41, 1], [254, 24, 63, 2], [292, 50, 34, 0], [352, 40, 49, 1],
+        [407, 36, 29, 2], [458, 50, 42, 0], [520, 40, 56, 1], [571, 46, 34, 0]
+      ],
+      apartments: [
+        [10, 31, 54, 0], [49, 23, 42, 1], [81, 35, 68, 0], [128, 29, 48, 2],
+        [168, 37, 57, 1], [214, 22, 76, 0], [247, 41, 44, 2], [300, 27, 64, 1],
+        [338, 36, 52, 0], [382, 30, 73, 2], [425, 43, 44, 0], [481, 28, 60, 1],
+        [522, 36, 48, 2], [569, 29, 71, 0]
+      ],
+      terraces: [
+        [4, 52, 14, 0], [63, 41, 21, 1], [112, 66, 11, 2], [188, 43, 26, 0],
+        [244, 62, 16, 1], [315, 38, 30, 2], [365, 66, 13, 0], [441, 46, 22, 1],
+        [502, 61, 15, 2], [574, 38, 27, 0]
+      ]
+    };
+
+    const CLOUDS = [
+      [24, 42, 3, 0.8], [108, 26, 6, 0.55], [189, 52, 4, 0.7], [299, 39, 9, 0.52],
+      [394, 64, 5, 0.68], [535, 33, 3, 0.5], [620, 52, 8, 0.6]
+    ];
+    const STARS = [
+      [18, 22, 1], [37, 51, 1], [63, 33, 2], [94, 18, 1], [119, 48, 1], [143, 29, 1],
+      [174, 61, 1], [205, 25, 2], [234, 46, 1], [270, 19, 1], [301, 56, 2], [328, 34, 1],
+      [357, 21, 1], [386, 49, 1], [417, 28, 2], [446, 62, 1], [491, 39, 1], [531, 24, 1],
+      [559, 51, 2], [602, 30, 1]
+    ];
+    const CRANES = [[34, 66, 43], [174, 62, 52], [331, 70, 35], [505, 58, 47]];
+    const BIRDS = [[36, 94, .4], [85, 117, .8], [143, 84, 1.2], [214, 108, .55], [285, 79, 1.1], [352, 101, .7], [425, 72, 1.4], [522, 90, .3], [590, 112, 1.0]];
+    const DROPS = [[58, 43, 11], [101, 121, 8], [178, 63, 13], [242, 154, 10], [318, 91, 9], [379, 140, 16], [429, 61, 7], [35, 189, 6], [132, 178, 7], [285, 183, 13], [401, 194, 9]];
+
+    function seeded(seed) {
+      let s = seed >>> 0;
+      return () => {
+        s += 0x6D2B79F5;
+        let t = s;
+        t = Math.imul(t ^ t >>> 15, t | 1);
+        t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+      };
+    }
+    const rng = seeded(0xDA771);
+    const FORE_SCHEDULE = [];
+    const foregroundTypes = ['grass', 'grass', 'fence', 'debris', 'column', 'pole', 'signal', 'barrier'];
+    for (let i = 0; i < 68; i += 1) {
+      const type = foregroundTypes[i % foregroundTypes.length];
+      FORE_SCHEDULE.push({
+        type,
+        x: Math.floor(rng() * 720) - 120,
+        at: rng() * 60,
+        life: 4.3 + rng() * 10,
+        speed: type === 'column' ? 2.2 : type === 'pole' ? 1.65 : type === 'grass' ? 0.85 : 1.15,
+        size: 0.65 + rng() * 0.8,
+        seed: rng()
+      });
+    }
+
+    const GLYPHS = {
+      'A': ['01110','10001','10001','11111','10001','10001','10001'], 'B': ['11110','10001','10001','11110','10001','10001','11110'],
+      'C': ['01111','10000','10000','10000','10000','10000','01111'], 'D': ['11110','10001','10001','10001','10001','10001','11110'],
+      'E': ['11111','10000','10000','11110','10000','10000','11111'], 'G': ['01111','10000','10000','10111','10001','10001','01110'],
+      'H': ['10001','10001','10001','11111','10001','10001','10001'], 'K': ['10001','10010','10100','11000','10100','10010','10001'],
+      'I': ['11111','00100','00100','00100','00100','00100','11111'], 'L': ['10000','10000','10000','10000','10000','10000','11111'],
+      'M': ['10001','11011','10101','10101','10001','10001','10001'], 'N': ['10001','11001','10101','10011','10001','10001','10001'],
+      'R': ['11110','10001','10001','11110','10100','10010','10001'], 'S': ['01111','10000','10000','01110','00001','00001','11110'],
+      'T': ['11111','00100','00100','00100','00100','00100','00100'], 'U': ['10001','10001','10001','10001','10001','10001','01110'],
+      'V': ['10001','10001','10001','10001','10001','01010','00100'], 'W': ['10001','10001','10001','10101','10101','11011','10001'], 'Y': ['10001','10001','01010','00100','00100','00100','00100'],
+      'O': ['01110','10001','10001','10001','10001','10001','01110'], 'P': ['11110','10001','10001','11110','10000','10000','10000'],
+      '0': ['01110','10001','10011','10101','11001','10001','01110'], '1': ['00100','01100','00100','00100','00100','00100','01110'],
+      '2': ['01110','10001','00001','00010','00100','01000','11111'], '3': ['11110','00001','00001','01110','00001','00001','11110'],
+      '4': ['00010','00110','01010','10010','11111','00010','00010'], '5': ['11111','10000','10000','11110','00001','00001','11110'],
+      '6': ['01110','10000','10000','11110','10001','10001','01110'], '7': ['11111','00001','00010','00100','01000','01000','01000'],
+      '8': ['01110','10001','10001','01110','10001','10001','01110'], '9': ['01110','10001','10001','01111','00001','00001','01110'],
+      ':': ['00000','00100','00100','00000','00100','00100','00000'], '/': ['00001','00010','00010','00100','01000','01000','10000'],
+      '-': ['00000','00000','00000','11111','00000','00000','00000'], '.': ['00000','00000','00000','00000','00000','00110','00110'],
+      '>': ['10000','01000','00100','00010','00100','01000','10000'], ' ': ['00000','00000','00000','00000','00000','00000','00000']
+    };
+
+    function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+    function mod(v, n) { return ((v % n) + n) % n; }
+    function smooth(v) { return v * v * (3 - 2 * v); }
+    function hexToRgb(hex) {
+      return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16)];
+    }
+    function rgbToHex(r, g, b) {
+      return '#' + [r, g, b].map(v => Math.round(v).toString(16).padStart(2, '0')).join('');
+    }
+    function mixColor(a, b, amount) {
+      const ar = hexToRgb(a); const br = hexToRgb(b);
+      return rgbToHex(ar[0] + (br[0] - ar[0]) * amount, ar[1] + (br[1] - ar[1]) * amount, ar[2] + (br[2] - ar[2]) * amount);
+    }
+    function mixPalette(a, b, amount) {
+      const out = {};
+      Object.keys(a).forEach(key => { out[key] = mixColor(a[key], b[key], amount); });
+      return out;
+    }
+    function paletteAt(t) {
+      const phase = mod(t, 60);
+      if (state.paletteMode === 0) return NIGHT;
+      if (state.paletteMode === 1) return SUNRISE;
+      if (state.paletteMode === 2) return DAY;
+      if (phase < 18) return mixPalette(NIGHT, SUNRISE, smooth(phase / 18));
+      if (phase < 32) return SUNRISE;
+      if (phase < 48) return mixPalette(SUNRISE, DAY, smooth((phase - 32) / 16));
+      if (phase < 56) return DAY;
+      return mixPalette(DAY, NIGHT, smooth((phase - 56) / 4));
+    }
+
+    function drawPixelText(text, x, y, scale, color, spacing = 1) {
+      ctx.fillStyle = color;
+      let cursor = x;
+      for (const char of text) {
+        const glyph = GLYPHS[char] || GLYPHS[' '];
+        for (let row = 0; row < glyph.length; row += 1) {
+          for (let col = 0; col < glyph[row].length; col += 1) {
+            if (glyph[row][col] === '1') ctx.fillRect(cursor + col * scale, y + row * scale, scale, scale);
+          }
+        }
+        cursor += 6 * scale + spacing;
+      }
+    }
+    function drawTextTo(target, text, x, y, scale, color) {
+      target.fillStyle = color;
+      let cursor = x;
+      for (const char of text) {
+        const glyph = GLYPHS[char] || GLYPHS[' '];
+        for (let row = 0; row < glyph.length; row += 1) {
+          for (let col = 0; col < glyph[row].length; col += 1) {
+            if (glyph[row][col] === '1') target.fillRect(cursor + col * scale, y + row * scale, scale, scale);
+          }
+        }
+        cursor += 6 * scale + 1;
+      }
+    }
+
+    function drawSky(p, t, phase) {
+      const horizon = phase >= 18 && phase < 32 ? 155 : 149;
+      const bands = 11;
+      for (let i = 0; i < bands; i += 1) {
+        const q = i / (bands - 1);
+        const color = q < 0.48 ? mixColor(p.skyTop, p.skyMid, q / 0.48) : mixColor(p.skyMid, p.skyLow, (q - 0.48) / 0.52);
+        ctx.fillStyle = color;
+        ctx.fillRect(0, Math.floor(q * horizon), W, Math.ceil(horizon / bands) + 1);
+      }
+      for (const s of STARS) {
+        const alpha = clamp((20 - phase) / 14, 0, 1) * (0.55 + 0.4 * Math.sin(t * 1.7 + s[0]));
+        if (alpha <= 0) continue;
+        ctx.globalAlpha = alpha;
+        ctx.fillStyle = p.star;
+        ctx.fillRect(mod(s[0] - t * 0.01 * 8, 480), s[1], s[2], s[2]);
+      }
+      ctx.globalAlpha = 1;
+      for (const c of CLOUDS) {
+        const x = mod(c[0] - t * 0.22 * motionFactor * 3 + state.seat * 5, 640) - 80;
+        const y = c[1] + Math.floor(Math.sin(t * 0.11 + c[0]) * 1.5);
+        ctx.globalAlpha = c[3] * (phase < 40 ? 0.48 : 0.7);
+        ctx.fillStyle = p.cloud;
+        ctx.fillRect(x, y, c[2] * 2, 2);
+        ctx.fillRect(x - 4, y + 2, c[2] * 3, 2);
+        ctx.fillRect(x + 4, y + 4, c[2] * 2, 1);
+      }
+      ctx.globalAlpha = 1;
+      if ((phase >= 17 && phase < 34) || phase >= 38) {
+        const sunT = phase < 34 ? clamp((phase - 17) / 17, 0, 1) : clamp((phase - 38) / 12, 0, 1);
+        const sx = 362 - state.seat * 18;
+        const sy = Math.floor(129 - sunT * 30);
+        ctx.fillStyle = p.glow;
+        ctx.fillRect(sx - 8, sy - 2, 17, 5);
+        ctx.fillStyle = p.sun;
+        ctx.fillRect(sx - 4, sy - 4, 9, 9);
+        ctx.fillRect(sx - 6, sy - 2, 13, 5);
+      }
+      ctx.fillStyle = p.horizon;
+      ctx.globalAlpha = 0.4;
+      ctx.fillRect(0, horizon - 2, W, 2);
+      ctx.globalAlpha = 1;
+    }
+
+    function drawTower(target, x, baseY, w, h, style, p) {
+      const top = baseY - h;
+      target.fillStyle = p.deep;
+      target.fillRect(x, top, w, h);
+      target.fillStyle = p.structure;
+      if (style === 1) target.fillRect(x + Math.floor(w * .32), top - 7, Math.max(2, Math.floor(w * .3)), 7);
+      if (style === 2) target.fillRect(x - 2, top + 4, w + 4, 2);
+      target.fillStyle = p.edge;
+      for (let yy = top + 7; yy < baseY - 4; yy += 9) {
+        if ((yy + x) % 3 !== 0) target.fillRect(x + 3, yy, Math.max(2, w - 7), 1);
+      }
+      if (h > 80) {
+        target.fillStyle = p.accent;
+        target.fillRect(x + Math.floor(w / 2), top - 12, 1, 12);
+        target.fillRect(x + Math.floor(w / 2) - 2, top - 12, 5, 1);
+      }
+    }
+    function drawFactory(target, x, baseY, w, h, style, p) {
+      const top = baseY - h;
+      target.fillStyle = p.structure;
+      target.fillRect(x, top, w, h);
+      target.fillStyle = p.deep;
+      target.fillRect(x - 3, top + 4, w + 6, 3);
+      if (style === 1) target.fillRect(x + 5, top - 21, 5, 21);
+      if (style === 2) target.fillRect(x + w - 9, top - 30, 5, 30);
+      target.fillStyle = p.edge;
+      for (let xx = x + 4; xx < x + w - 3; xx += 8) target.fillRect(xx, top + 10, 3, 2);
+      for (let yy = top + 19; yy < baseY - 4; yy += 11) target.fillRect(x + 4, yy, w - 8, 1);
+    }
+    function drawApartment(target, x, baseY, w, h, style, p) {
+      const top = baseY - h;
+      target.fillStyle = p.deep;
+      target.fillRect(x, top, w, h);
+      target.fillStyle = p.edge;
+      for (let yy = top + 8; yy < baseY - 3; yy += 10) {
+        for (let xx = x + 4; xx < x + w - 3; xx += 8) {
+          if ((xx + yy + style) % 5 < 3) target.fillRect(xx, yy, 3, 3);
+        }
+      }
+      if (style === 2) {
+        target.fillStyle = p.leaf;
+        target.fillRect(x - 2, top - 3, w + 4, 3);
+      }
+    }
+    function drawTerrace(target, x, baseY, w, h, style, p) {
+      target.fillStyle = style === 1 ? p.farm : p.structure;
+      target.fillRect(x, baseY - h, w, h);
+      target.fillStyle = p.leaf;
+      target.fillRect(x + 3, baseY - h - 3, Math.max(1, w - 6), 3);
+      for (let xx = x + 5; xx < x + w - 2; xx += 8) target.fillRect(xx, baseY - h - 5, 2, 2);
+    }
+
+    function renderStrip(target, strip, baseY, speed, t, camera, p, kind) {
+      const tile = 640;
+      const offset = t * speed * 12 * motionFactor - camera;
+      for (const item of strip) {
+        const x0 = mod(item[0] - offset, tile);
+        for (let copy = -1; copy <= 1; copy += 1) {
+          const x = Math.floor(x0 + copy * tile);
+          if (x > W + 8 || x + item[1] < -8) continue;
+          if (kind === 'tower') drawTower(target, x, baseY, item[1], item[2], item[3], p);
+          else if (kind === 'factory') drawFactory(target, x, baseY, item[1], item[2], item[3], p);
+          else if (kind === 'apartment') drawApartment(target, x, baseY, item[1], item[2], item[3], p);
+          else drawTerrace(target, x, baseY, item[1], item[2], item[3], p);
+        }
+      }
+    }
+
+    function drawCranes(target, t, camera, p, phase) {
+      const exposure = phase > 32 ? 1 : 0.8;
+      for (const crane of CRANES) {
+        const x = mod(crane[0] - t * 0.018 * 12 * motionFactor - camera * .4, 640) - 70;
+        const y = 139 - crane[2] * .35;
+        target.strokeStyle = p.edge;
+        target.globalAlpha = exposure;
+        target.lineWidth = 1;
+        target.beginPath(); target.moveTo(x, y + crane[2]); target.lineTo(x, y); target.lineTo(x + crane[1], y); target.stroke();
+        target.beginPath(); target.moveTo(x + 8, y + 3); target.lineTo(x + crane[1] - 11, y + 3); target.lineTo(x + crane[1] - 11, 166); target.stroke();
+        target.fillStyle = p.accent; target.fillRect(x + crane[1] - 12, 164, 3, 3);
+      }
+      target.globalAlpha = 1;
+    }
+
+    function drawTallLife(target, t, camera, p, phase) {
+      const open = phase >= 45;
+      const base = 171;
+      const offset = t * (open ? 0.12 : 0.055) * 12 * motionFactor - camera * .6;
+      const positions = [27, 77, 141, 222, 303, 374, 449, 534, 615];
+      for (let i = 0; i < positions.length; i += 1) {
+        const x = mod(positions[i] - offset, 640) - 80;
+        target.fillStyle = p.deep;
+        target.fillRect(x, base - 18 - (i % 3) * 7, 2, 18 + (i % 3) * 7);
+        target.fillStyle = open ? p.leaf : p.structure;
+        target.fillRect(x - 5, base - 21 - (i % 3) * 7, 12, 4);
+        target.fillRect(x - 3, base - 25 - (i % 2) * 5, 8, 4);
+        if (open && i % 2 === 0) target.fillRect(x - 8, base - 16, 4, 2);
+      }
+      if (open) {
+        for (let i = 0; i < 4; i += 1) {
+          const x = mod(86 + i * 138 - offset * .6, 640) - 60;
+          const y = 127 + (i % 2) * 3;
+          target.strokeStyle = p.edge;
+          target.beginPath(); target.moveTo(x, y + 24); target.lineTo(x, y); target.stroke();
+          target.beginPath(); target.moveTo(x - 8, y + 3); target.lineTo(x, y); target.lineTo(x + 8, y + 3); target.stroke();
+          target.beginPath(); target.moveTo(x - 6, y + 6); target.lineTo(x, y); target.lineTo(x + 6, y + 6); target.stroke();
+          target.strokeStyle = p.farm;
+          target.beginPath(); target.moveTo(x, y); target.lineTo(x + Math.cos(t * .8 + i) * 9, y - Math.sin(t * .8 + i) * 9); target.stroke();
+        }
+      }
+    }
+
+    function drawSkyline(t, p, phase) {
+      skylineCtx.clearRect(0, 0, W, H);
+      const camera = (state.seat - .5) * 16;
+      renderStrip(skylineCtx, STRIPS.towers, 167, .01, t, camera * .25, p, 'tower');
+      renderStrip(skylineCtx, STRIPS.factories, 170, .09, t, camera * .4, p, 'factory');
+      drawCranes(skylineCtx, t, camera, p, phase);
+      renderStrip(skylineCtx, STRIPS.apartments, 172, .18, t, camera * .7, p, 'apartment');
+      if (phase >= 45) renderStrip(skylineCtx, STRIPS.terraces, 171, .24, t, camera, p, 'terrace');
+      drawTallLife(skylineCtx, t, camera, p, phase);
+      ctx.drawImage(skylineBuffer, 0, 0);
+    }
+
+    function drawReflection(t, p, phase) {
+      reflectionCtx.clearRect(0, 0, W, H);
+      const step = state.qualityHigh && !state.autoLow ? 1 : 3;
+      const sourceStart = 112;
+      const sourceEnd = 171;
+      const amplitude = reducedMotion ? 1.25 : (phase > 18 ? 4.5 : 2.5);
+      for (let sy = sourceStart; sy < sourceEnd; sy += step) {
+        const depth = (sy - sourceStart) / (sourceEnd - sourceStart);
+        const dy = waterY + Math.floor(depth * (H - waterY));
+        const offset = Math.floor(Math.sin(t * 2.2 + sy * .37) * amplitude / 2) * 2;
+        const alpha = (1 - depth) * (state.qualityHigh ? .54 : .4);
+        reflectionCtx.globalAlpha = alpha;
+        reflectionCtx.drawImage(skylineBuffer, 0, sy, W, 1, offset, dy, W, 1);
+        if (offset > 0) reflectionCtx.drawImage(skylineBuffer, 0, sy, W, 1, offset - W, dy, W, 1);
+        reflectionCtx.globalCompositeOperation = 'source-atop';
+        reflectionCtx.fillStyle = depth < .3 ? p.reflection : p.waterHi;
+        reflectionCtx.fillRect(0, dy, W, 1);
+        reflectionCtx.globalCompositeOperation = 'source-over';
+      }
+      reflectionCtx.globalAlpha = 1;
+      ctx.globalAlpha = phase >= 28 && phase < 38 ? .35 : .84;
+      ctx.drawImage(reflectionBuffer, 0, 0);
+      ctx.globalAlpha = 1;
+    }
+
+    function drawWater(t, p, phase) {
+      ctx.fillStyle = p.water;
+      ctx.fillRect(0, waterY, W, H - waterY);
+      ctx.fillStyle = p.horizon;
+      ctx.globalAlpha = .62;
+      ctx.fillRect(0, waterY - 2, W, 2);
+      ctx.globalAlpha = 1;
+      drawReflection(t, p, phase);
+      const bands = state.qualityHigh && !state.autoLow ? 48 : 25;
+      for (let i = 0; i < bands; i += 1) {
+        const y = waterY + 5 + i * 2;
+        const drift = Math.floor(Math.sin(t * 1.4 + i * 1.91) * (reducedMotion ? 1 : 3));
+        ctx.fillStyle = i % 4 === 0 ? p.waterHi : p.edge;
+        ctx.globalAlpha = (0.13 + (i % 7) * .018) * (phase >= 38 ? 1.15 : 1);
+        ctx.fillRect(mod(drift + i * 19, W), y, 17 + (i % 5) * 5, 1);
+        if (i % 3 === 0) ctx.fillRect(mod(drift + i * 19 + 46, W), y + 1, 7, 1);
+      }
+      ctx.globalAlpha = 1;
+      if (phase >= 18 && phase < 31) {
+        const sx = 362 - state.seat * 18;
+        ctx.fillStyle = p.glow;
+        ctx.globalAlpha = .72;
+        for (let i = 0; i < 12; i += 1) {
+          const yy = waterY + 4 + i * 4;
+          const ww = Math.max(2, 23 - i * 1.6);
+          ctx.fillRect(Math.floor(sx - ww / 2 + Math.sin(i * 4.8 + t) * 2), yy, ww, 1);
+        }
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function drawForegroundObject(obj, x, p, t) {
+      const s = obj.size;
+      const y = 201;
+      ctx.fillStyle = p.ink;
+      if (obj.type === 'grass') {
+        const h = 7 + Math.floor((obj.seed * 13) % 12);
+        ctx.fillRect(x, y - h, Math.max(1, Math.floor(s * 2)), h + 8);
+        ctx.fillRect(x + 2, y - h + 4, 6, 1);
+        ctx.fillStyle = p.leaf;
+        ctx.fillRect(x - 2, y - h + 2, 3, 2);
+      } else if (obj.type === 'fence') {
+        ctx.fillRect(x, y - 21, 2, 25); ctx.fillRect(x + 37, y - 21, 2, 25);
+        ctx.fillRect(x, y - 16, 39, 2); ctx.fillRect(x, y - 5, 39, 2);
+      } else if (obj.type === 'debris') {
+        ctx.fillRect(x, y - 2, 9, 3); ctx.fillRect(x + 4, y - 6, 2, 4); ctx.fillRect(x + 14, y, 4, 2);
+      } else if (obj.type === 'column') {
+        ctx.fillRect(x, 156, 8, 73); ctx.fillStyle = p.structure; ctx.fillRect(x + 2, 158, 3, 67);
+        ctx.fillStyle = p.accent; ctx.fillRect(x - 2, 156, 12, 2);
+      } else if (obj.type === 'pole') {
+        ctx.fillRect(x, 121, 2, 85); ctx.fillRect(x - 10, 125, 22, 2); ctx.fillRect(x - 6, 130, 2, 2); ctx.fillRect(x + 6, 130, 2, 2);
+      } else if (obj.type === 'signal') {
+        ctx.fillRect(x, 165, 2, 29); ctx.fillRect(x - 4, 159, 10, 9); ctx.fillStyle = p.accent; ctx.fillRect(x - 1, 161, 4, 4);
+      } else if (obj.type === 'barrier') {
+        ctx.fillStyle = p.edge; ctx.fillRect(x, y - 16, 42, 3); ctx.fillRect(x + 4, y - 13, 2, 18); ctx.fillRect(x + 35, y - 13, 2, 18);
+        ctx.fillStyle = p.accent; ctx.fillRect(x + 8, y - 16, 7, 3); ctx.fillRect(x + 25, y - 16, 7, 3);
+      }
+      if (obj.type !== 'column') {
+        ctx.fillStyle = p.ink;
+        ctx.fillRect(x - 2, 199, 3, 17);
+      }
+    }
+    function drawForeground(t, p) {
+      for (const obj of FORE_SCHEDULE) {
+        const age = mod(t - obj.at, 60);
+        if (age > obj.life) continue;
+        const entry = smooth(clamp(age / obj.life, 0, 1));
+        const x = mod(obj.x - age * obj.speed * 28 * motionFactor + (state.seat - .5) * 23, 720) - 120;
+        ctx.globalAlpha = .46 + entry * .54;
+        drawForegroundObject(obj, Math.floor(x), p, t);
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawBirds(t, p, phase) {
+      if (phase < 45 || phase > 56) return;
+      const count = state.qualityHigh && !state.autoLow ? BIRDS.length : 4;
+      for (let i = 0; i < count; i += 1) {
+        const b = BIRDS[i];
+        const x = mod(b[0] + t * (1.8 + b[2]) * motionFactor - state.seat * 8, 640) - 48;
+        const y = b[1] + Math.floor(Math.sin(t * 2.1 + i) * 3);
+        ctx.strokeStyle = p.ink;
+        ctx.globalAlpha = .74;
+        ctx.beginPath();
+        ctx.moveTo(x - 4, y); ctx.lineTo(x, y + (i % 2 ? 2 : 1)); ctx.lineTo(x + 4, y);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    function drawTunnel(t, p, phase) {
+      const q = clamp((phase - 28) / 10, 0, 1);
+      const fadeIn = smooth(clamp(q * 3, 0, 1));
+      const fadeOut = 1 - smooth(clamp((q - .68) * 3, 0, 1));
+      const darkness = Math.max(fadeIn * fadeOut, .14);
+      ctx.fillStyle = p.ink;
+      ctx.globalAlpha = .85 * darkness;
+      ctx.fillRect(viewport.x, viewport.y, viewport.w, viewport.h);
+      ctx.globalAlpha = 1;
+      ctx.strokeStyle = p.edge;
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 12; i += 1) {
+        const z = mod(i / 12 + t * .11 * motionFactor, 1);
+        const near = z * z;
+        const cx = W / 2 + Math.sin(t * .4 + i) * 7;
+        const half = 13 + near * 210;
+        const yy = 65 + near * 154;
+        ctx.globalAlpha = .16 + near * .6;
+        ctx.strokeRect(Math.floor(cx - half), Math.floor(yy - half * .22), Math.floor(half * 2), Math.floor(half * .44));
+      }
+      ctx.globalAlpha = 1;
+      for (let i = 0; i < 9; i += 1) {
+        const x = 41 + i * 50 + Math.floor(Math.sin(t * .8 + i) * 2);
+        ctx.fillStyle = i % 3 === 0 ? p.accent : p.glow;
+        ctx.fillRect(x, 58 + (i % 2) * 4, 4, 2);
+      }
+      ctx.strokeStyle = p.sun;
+      ctx.beginPath(); ctx.moveTo(29, 206); ctx.lineTo(226, 133); ctx.lineTo(451, 206); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(78, 206); ctx.lineTo(226, 150); ctx.lineTo(402, 206); ctx.stroke();
+    }
+
+    function drawOpposingTrain(t, p, phase) {
+      if (phase < 56) return;
+      const u = clamp((phase - 56) / 4, 0, 1);
+      if (reducedMotion) {
+        const dissolve = smooth(u);
+        ctx.fillStyle = p.deep;
+        ctx.globalAlpha = dissolve * .78;
+        for (let i = 0; i < 54; i += 1) {
+          const x = mod(i * 59 + Math.floor(t * 13), W);
+          const y = 30 + mod(i * 37, 188);
+          ctx.fillRect(x, y, 7 + (i % 4), 2 + (i % 3));
+        }
+        ctx.globalAlpha = 1;
+        return;
+      }
+      const ease = smooth(u);
+      const x = -W + ease * (W + 28);
+      ctx.fillStyle = p.ink;
+      ctx.fillRect(x, 44, W + 12, 166);
+      ctx.fillStyle = p.structure;
+      ctx.fillRect(x + 14, 54, W - 20, 7);
+      for (let i = 0; i < 9; i += 1) {
+        const wx = x + 18 + i * 50;
+        ctx.fillStyle = i % 3 === 0 ? p.accent : p.glow;
+        ctx.fillRect(wx, 90, 28, 19); ctx.fillRect(wx + 3, 93, 22, 2);
+      }
+      ctx.fillStyle = p.edge;
+      ctx.fillRect(x, 198, W + 12, 6);
+      ctx.fillStyle = p.accent;
+      ctx.fillRect(x + 31, 193, 11, 3); ctx.fillRect(x + 90, 193, 11, 3);
+    }
+
+    function drawCondensation(p, t) {
+      if (state.condensation <= .01) return;
+      ctx.save();
+      ctx.beginPath(); ctx.rect(viewport.x, viewport.y, viewport.w, viewport.h); ctx.clip();
+      const haze = Math.min(.3, state.condensation * .25);
+      ctx.fillStyle = p.cloud;
+      ctx.globalAlpha = haze;
+      for (let i = 0; i < DROPS.length; i += 1) {
+        const d = DROPS[i];
+        const wobble = Math.sin(t * .19 + i) * 2;
+        ctx.beginPath(); ctx.arc(d[0] + wobble, d[1], d[2] * state.condensation, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = p.edge;
+        ctx.globalAlpha = haze * .55;
+        ctx.fillRect(d[0] + wobble - 2, d[1] - d[2] + 2, 2, Math.max(2, d[2] * .65));
+        ctx.fillStyle = p.cloud;
+        ctx.globalAlpha = haze;
+      }
+      if (state.clearPulse > 0) {
+        ctx.globalAlpha = state.clearPulse * .22;
+        ctx.fillStyle = p.star;
+        ctx.fillRect(220, 104, 40, 1);
+        ctx.fillRect(239, 85, 1, 39);
+      }
+      ctx.restore();
+      ctx.globalAlpha = 1;
+    }
+
+    function drawTrainFrame(p, t, phase) {
+      const frame = p.ink;
+      ctx.fillStyle = frame;
+      ctx.fillRect(0, 0, W, 13);
+      ctx.fillRect(0, 226, W, 44);
+      ctx.fillRect(0, 0, 17, H);
+      ctx.fillRect(463, 0, 17, H);
+      ctx.fillStyle = p.deep;
+      ctx.fillRect(17, 11, 446, 4);
+      ctx.fillRect(16, 224, 448, 5);
+      ctx.fillStyle = p.edge;
+      ctx.fillRect(17, 13, 3, 214); ctx.fillRect(460, 13, 3, 214);
+      ctx.fillStyle = p.structure;
+      ctx.fillRect(21, 229, 438, 2);
+      ctx.fillStyle = p.glow;
+      ctx.globalAlpha = .15 + .1 * Math.sin(t * 1.8);
+      ctx.fillRect(24, 16, 2, 201); ctx.fillRect(455, 16, 2, 201);
+      ctx.globalAlpha = 1;
+      const shadeY = 14 + Math.floor(state.shade * 67);
+      if (state.shade > .01) {
+        ctx.fillStyle = frame;
+        ctx.globalAlpha = .78 + state.shade * .2;
+        ctx.fillRect(20, 14, 440, shadeY - 14);
+        ctx.fillStyle = p.edge;
+        ctx.fillRect(20, shadeY, 440, 2);
+        ctx.globalAlpha = 1;
+      }
+      ctx.fillStyle = frame;
+      ctx.globalAlpha = state.shade * .08;
+      ctx.fillRect(viewport.x, viewport.y, viewport.w, viewport.h);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = p.deep;
+      ctx.fillRect(21, 233, 438, 31);
+      ctx.fillStyle = p.edge;
+      ctx.fillRect(21, 233, 438, 1);
+      ctx.fillStyle = p.structure;
+      ctx.fillRect(28, 238, 424, 20);
+      ctx.fillStyle = p.ink;
+      ctx.fillRect(31, 241, 418, 14);
+      const routeColor = phase >= 48 ? p.farm : p.glow;
+      drawPixelText('DWN 07 > GREEN LINE', 38, 244, 1, routeColor, 0);
+      drawPixelText(state.paletteMode === null ? 'AUTO' : ['NITE', 'DAWN', 'GREEN'][state.paletteMode], 394, 244, 1, p.text, 0);
+      ctx.fillStyle = p.edge;
+      ctx.fillRect(27, 261, 426, 1);
+      const hintAlpha = clamp(1 - Math.max(0, state.elapsed - state.lastInput - 5) / 8, .16, 1);
+      ctx.globalAlpha = hintAlpha;
+      drawPixelText('MOVE:SEAT DRAG/UP-DN:SHADE CLICK/SPACE:CLEAR R:RESET', 24, 264, 1, p.text, 0);
+      ctx.globalAlpha = 1;
+      if (state.clearPulse > 0) {
+        ctx.fillStyle = p.star;
+        ctx.globalAlpha = state.clearPulse * .7;
+        ctx.fillRect(44, 228, 30, 1);
+        ctx.globalAlpha = 1;
+      }
+    }
+
+    function draw(t) {
+      const phase = mod(t, 60);
+      const p = paletteAt(t);
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = p.skyTop;
+      ctx.fillRect(0, 0, W, H);
+      drawSky(p, t, phase);
+      drawSkyline(t, p, phase);
+      drawWater(t, p, phase);
+      drawBirds(t, p, phase);
+      drawForeground(t, p);
+      if (phase >= 28 && phase < 38) drawTunnel(t, p, phase);
+      if (phase >= 38 && phase < 48) {
+        ctx.fillStyle = p.glow;
+        ctx.globalAlpha = .06 * Math.sin((phase - 38) * .8) + .09;
+        ctx.fillRect(viewport.x, viewport.y, viewport.w, viewport.h);
+        ctx.globalAlpha = 1;
+      }
+      drawOpposingTrain(t, p, phase);
+      drawCondensation(p, t);
+      drawTrainFrame(p, t, phase);
+      state.clearPulse = Math.max(0, state.clearPulse - .045);
+    }
+
+    function clearCondensation() {
+      state.condensation = .03;
+      state.clearPulse = 1;
+      state.lastInput = state.elapsed;
+      canvas.focus({ preventScroll: true });
+    }
+    function pointerPosition(event) {
+      const rect = canvas.getBoundingClientRect();
+      return {
+        x: clamp((event.clientX - rect.left) / rect.width, 0, 1),
+        y: clamp((event.clientY - rect.top) / rect.height, 0, 1)
+      };
+    }
+    function markInput() { state.lastInput = state.elapsed; }
+    canvas.addEventListener('pointermove', event => {
+      const pos = pointerPosition(event);
+      state.seat = pos.x;
+      if (state.dragging) {
+        if (Math.abs(pos.y - state.dragStartY) > .025) state.dragMoved = true;
+        state.shade = clamp(pos.y, 0, 1);
+      }
+      markInput();
+    });
+    canvas.addEventListener('pointerdown', event => {
+      const pos = pointerPosition(event);
+      state.dragging = true;
+      state.dragMoved = false;
+      state.dragStartY = pos.y;
+      state.seat = pos.x;
+      canvas.setPointerCapture?.(event.pointerId);
+      canvas.focus({ preventScroll: true });
+      markInput();
+    });
+    canvas.addEventListener('pointerup', event => {
+      if (!state.dragMoved) clearCondensation();
+      state.dragging = false;
+      canvas.releasePointerCapture?.(event.pointerId);
+    });
+    canvas.addEventListener('pointercancel', () => { state.dragging = false; });
+
+    window.addEventListener('keydown', event => {
+      const key = event.key.toLowerCase();
+      if (event.code === 'Space') { event.preventDefault(); clearCondensation(); return; }
+      if (key === 'r') {
+        event.preventDefault(); state.elapsed = 0; state.shade = .18; state.seat = .5; state.condensation = .72; state.paletteMode = null; markInput(); return;
+      }
+      if (key === 'q') { state.qualityHigh = !state.qualityHigh; state.autoLow = false; markInput(); return; }
+      if (key === 'p') { state.paletteMode = state.paletteMode === null ? 0 : (state.paletteMode + 1) % 3; markInput(); return; }
+      if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
+        event.preventDefault(); state.shade = clamp(state.shade + (event.key === 'ArrowUp' ? -.06 : .06), 0, 1); markInput(); return;
+      }
+      if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+        event.preventDefault(); state.seat = clamp(state.seat + (event.key === 'ArrowLeft' ? -.045 : .045), 0, 1); markInput();
+      }
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      state.paused = document.hidden;
+      lastFrame = performance.now();
+      if (!state.paused) requestAnimationFrame(frame);
+    });
+
+    let lastFrame = performance.now();
+    function frame(now) {
+      if (state.paused) return;
+      const delta = clamp((now - lastFrame) / 1000, 0, .05);
+      lastFrame = now;
+      if (delta > .038) state.frameSlow += delta; else state.frameSlow = Math.max(0, state.frameSlow - delta * .5);
+      if (state.frameSlow > 2 && state.qualityHigh && !state.autoLow) state.autoLow = true;
+      state.elapsed = mod(state.elapsed + delta, 60);
+      state.condensation = Math.min(1, state.condensation + delta * .035);
+      draw(state.elapsed);
+      requestAnimationFrame(frame);
+    }
+
+    draw(0);
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

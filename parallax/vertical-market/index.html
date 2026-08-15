@@ -1,0 +1,505 @@
+<!doctype html>
+<!-- All visual assets are original and generated procedurally in this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <link rel="icon" href="data:,">
+  <title>Upward Market</title>
+  <style>
+    :root { color-scheme: dark; background: #0b0911; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #0b0911; }
+    body { display: grid; place-items: center; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; }
+    #frame { position: fixed; inset: 0; display: grid; place-items: center; overflow: hidden; }
+    #scene { display: block; width: min(100vw, 177.7778vh); max-width: 100vw; max-height: 100vh; aspect-ratio: 16 / 9; image-rendering: pixelated; image-rendering: crisp-edges; outline: none; background: #100e1a; }
+    #scene:focus-visible { box-shadow: 0 0 0 2px #f4d6a0, 0 0 20px #d65f56; }
+    #fallback { display: none; width: min(92vw, 36rem); padding: 1.2rem; border: 1px solid #99413f; color: #f4d6a0; background: #26162e; line-height: 1.5; }
+    #fallback strong { color: #e6a34c; }
+    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+  </style>
+</head>
+<body>
+  <main id="frame">
+    <canvas id="scene" width="320" height="180" tabindex="0" role="img" aria-label="Upward Market, a pixel-art night market viewed while rising through a city canyon" aria-describedby="instructions"></canvas>
+    <div id="fallback"><strong>Upward Market</strong><br>Canvas is unavailable in this browser. Open this file in a current version of Chrome, Firefox, Safari, or Edge.</div>
+    <p id="instructions" class="sr-only">A self-contained pixel-art scene. Move the pointer or touch to steer a lantern that reveals details. Click or press Enter to wake a window-network pulse. Arrow Up and Down adjust ascent speed. Press R to reset. The animation loops through a fifty-second climb and respects reduced-motion settings.</p>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+
+    const canvas = document.getElementById('scene');
+    const fallback = document.getElementById('fallback');
+    const W = 320, H = 180, TILE = 16, WORLD_H = 1740, LOOP = 50;
+    const ctx = canvas.getContext('2d', { alpha: false });
+    const lightCanvas = document.createElement('canvas');
+    lightCanvas.width = W; lightCanvas.height = H;
+    const light = lightCanvas.getContext('2d');
+    if (!ctx || !light) {
+      canvas.style.display = 'none';
+      fallback.style.display = 'block';
+      return;
+    }
+
+    const P = {
+      ink: '#100e1a', plum: '#26162e', deep: '#382039', brick: '#5b2735',
+      rust: '#99413f', gold: '#e6a34c', cream: '#f4d6a0', teal: '#2e8074',
+      coral: '#d65f56', blue: '#3c5571', smoke: '#9f7b6a', black: '#0b0911'
+    };
+    const reducedQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    let reducedMotion = !!(reducedQuery && reducedQuery.matches);
+    if (reducedQuery && reducedQuery.addEventListener) reducedQuery.addEventListener('change', e => { reducedMotion = e.matches; });
+
+    // A tiny generated atlas keeps every object in the same deliberately chunky language.
+    const atlas = document.createElement('canvas');
+    atlas.width = TILE * 5; atlas.height = TILE * 2;
+    const ac = atlas.getContext('2d');
+    ac.imageSmoothingEnabled = false;
+    const tilePos = Object.create(null);
+    let tileIndex = 0;
+    const tile = (name, paint) => {
+      const tx = (tileIndex % 5) * TILE, ty = Math.floor(tileIndex / 5) * TILE;
+      ac.clearRect(tx, ty, TILE, TILE);
+      paint(ac, tx, ty);
+      tilePos[name] = [tx, ty];
+      tileIndex++;
+    };
+    const px = (g, x, y, w, h, fill) => { g.fillStyle = fill; g.fillRect(x, y, w, h); };
+    tile('window', (g, x, y) => {
+      px(g, x + 1, y + 1, 14, 14, P.plum); px(g, x + 3, y + 3, 10, 9, P.blue);
+      px(g, x + 4, y + 4, 8, 7, P.rust); px(g, x + 7, y + 3, 2, 11, P.deep); px(g, x + 2, y + 12, 12, 2, P.ink);
+    });
+    tile('vent', (g, x, y) => {
+      px(g, x + 1, y + 4, 14, 9, P.ink); px(g, x + 3, y + 5, 10, 1, P.smoke);
+      px(g, x + 3, y + 8, 10, 1, P.smoke); px(g, x + 3, y + 11, 10, 1, P.brick); px(g, x + 2, y + 13, 12, 2, P.rust);
+    });
+    tile('balcony', (g, x, y) => {
+      px(g, x + 1, y + 7, 14, 3, P.ink); px(g, x + 2, y + 10, 12, 2, P.rust);
+      for (let i = 3; i < 14; i += 3) px(g, x + i, y + 2, 1, 9, P.cream);
+      px(g, x + 1, y + 12, 14, 2, P.deep); px(g, x + 3, y + 14, 2, 2, P.rust); px(g, x + 11, y + 14, 2, 2, P.rust);
+    });
+    tile('awning', (g, x, y) => {
+      px(g, x + 1, y + 3, 14, 3, P.coral); px(g, x + 2, y + 6, 12, 3, P.cream);
+      for (let i = 2; i < 15; i += 4) px(g, x + i, y + 6, 2, 4, P.rust);
+      px(g, x + 2, y + 10, 12, 2, P.ink); px(g, x + 3, y + 12, 1, 4, P.gold); px(g, x + 12, y + 12, 1, 4, P.gold);
+    });
+    tile('pipe', (g, x, y) => {
+      px(g, x + 6, y, 4, 16, P.ink); px(g, x + 7, y, 2, 16, P.rust); px(g, x + 3, y + 3, 8, 3, P.rust);
+      px(g, x + 1, y + 2, 4, 4, P.smoke); px(g, x + 9, y + 12, 6, 3, P.brick);
+    });
+    tile('glyph', (g, x, y) => {
+      px(g, x + 1, y + 1, 14, 14, P.deep); px(g, x + 3, y + 3, 10, 10, P.rust);
+      const glyphs = [[0,0,1,5],[2,0,1,3],[4,0,1,5],[1,3,3,1],[0,5,5,1],[2,1,1,5]];
+      glyphs.forEach(([gx, gy, gw, gh], i) => px(g, x + 4 + gx, y + 4 + gy, gw, gh, i % 2 ? P.gold : P.cream));
+    });
+    tile('plant', (g, x, y) => {
+      px(g, x + 7, y + 7, 2, 9, P.teal); px(g, x + 4, y + 13, 8, 2, P.brick); px(g, x + 3, y + 9, 5, 3, P.teal);
+      px(g, x + 8, y + 5, 5, 3, P.teal); px(g, x + 5, y + 5, 3, 3, P.coral); px(g, x + 10, y + 2, 3, 4, P.teal); px(g, x + 2, y + 3, 3, 5, P.teal);
+    });
+    tile('stall', (g, x, y) => {
+      px(g, x + 1, y + 3, 14, 3, P.gold); px(g, x + 2, y + 6, 12, 2, P.coral); px(g, x + 3, y + 8, 10, 6, P.deep);
+      px(g, x + 4, y + 9, 2, 3, P.cream); px(g, x + 8, y + 9, 3, 3, P.teal); px(g, x + 2, y + 14, 2, 2, P.rust); px(g, x + 12, y + 14, 2, 2, P.rust);
+    });
+    tile('person', (g, x, y) => {
+      px(g, x + 6, y + 3, 4, 4, P.cream); px(g, x + 4, y + 7, 8, 6, P.ink); px(g, x + 5, y + 13, 3, 3, P.rust); px(g, x + 9, y + 13, 3, 3, P.rust);
+      px(g, x + 3, y + 8, 2, 4, P.cream); px(g, x + 12, y + 8, 2, 4, P.cream);
+    });
+    tile('lantern', (g, x, y) => {
+      px(g, x + 6, y, 4, 2, P.cream); px(g, x + 3, y + 2, 10, 2, P.gold); px(g, x + 4, y + 4, 8, 8, P.coral);
+      px(g, x + 6, y + 5, 4, 6, P.cream); px(g, x + 3, y + 12, 10, 2, P.gold); px(g, x + 6, y + 14, 4, 2, P.ink);
+    });
+
+    const hash = n => {
+      let x = (n | 0) ^ 0x7f4a7c15;
+      x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+      x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+      return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+    };
+    const pick = (n, arr) => arr[Math.floor(hash(n) * arr.length) % arr.length];
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+    const state = {
+      t: 0, cameraY: 0, speed: 1, hint: 1, last: performance.now(), hidden: false,
+      pointer: { x: 160, y: 94, active: false }, pulses: [],
+      particles: [],
+      driftSeed: hash(91)
+    };
+    const dustCount = reducedMotion ? 58 : 124;
+    for (let i = 0; i < dustCount; i++) {
+      state.particles.push({
+        x: hash(1200 + i) * 320,
+        y: hash(1500 + i) * WORLD_H,
+        speed: 5 + hash(1800 + i) * 18,
+        sway: 0.7 + hash(2200 + i) * 1.8,
+        kind: i % 5,
+        phase: hash(2700 + i) * 6.28
+      });
+    }
+    const grain = [];
+    for (let i = 0; i < 620; i++) grain.push([Math.floor(hash(4000 + i) * W), Math.floor(hash(4700 + i) * H), i % 3]);
+
+    const screenY = (worldY, rate = 1) => H - (worldY - state.cameraY * rate);
+    const drawTile = (name, x, y, flip = false) => {
+      const pos = tilePos[name];
+      if (!pos) return;
+      ctx.save();
+      if (flip) { ctx.translate(Math.round(x + TILE), 0); ctx.scale(-1, 1); x = 0; }
+      ctx.drawImage(atlas, pos[0], pos[1], TILE, TILE, Math.round(x), Math.round(y), TILE, TILE);
+      ctx.restore();
+    };
+    const drawLightTile = (name, x, y, alpha = 1) => {
+      const pos = tilePos[name];
+      if (!pos) return;
+      light.globalAlpha = alpha;
+      light.drawImage(atlas, pos[0], pos[1], TILE, TILE, Math.round(x), Math.round(y), TILE, TILE);
+      light.globalAlpha = 1;
+    };
+    const revealAt = (x, y) => state.pointer.active && ((x - state.pointer.x) ** 2 + (y - state.pointer.y) ** 2 < 44 ** 2);
+    const pulseAt = (x, y) => {
+      let boost = 0;
+      for (const p of state.pulses) {
+        const py = screenY(p.worldY, 1), radius = 16 + p.age * 74;
+        const d = Math.hypot(x - p.x, y - py);
+        if (d < radius + 12) boost = Math.max(boost, 1 - Math.max(0, d - radius) / 26);
+      }
+      return clamp(boost, 0, 1);
+    };
+    const awake = (x, y) => Math.max(revealAt(x, y) ? 1 : 0, pulseAt(x, y));
+
+    function drawBackdrop() {
+      ctx.fillStyle = P.ink; ctx.fillRect(0, 0, W, H);
+      // The canyon's distant ceiling and towers move at a lazy fraction of the climb.
+      ctx.fillStyle = P.plum; ctx.fillRect(34, 0, 252, H);
+      for (let i = 0; i < 13; i++) {
+        const x = -20 + i * 29 + Math.sin(state.t * 0.09 + i) * 2;
+        const w = 12 + (i % 3) * 5;
+        ctx.fillStyle = i % 2 ? P.deep : P.brick;
+        ctx.fillRect(Math.round(x), 0, w, H);
+        for (let j = 0; j < 9; j++) {
+          const y = screenY(j * 42 - 20, 0.34);
+          if (y > -8 && y < H + 8 && hash(i * 80 + j * 11) > 0.3) {
+            ctx.fillStyle = hash(i * 90 + j * 13) > 0.54 ? P.rust : P.blue;
+            ctx.fillRect(Math.round(x + 3 + (j % 2) * 3), Math.round(y), 3, 8);
+          }
+        }
+      }
+      // distant antennae and suspended walkways
+      ctx.strokeStyle = P.blue; ctx.lineWidth = 1;
+      for (let i = 0; i < 7; i++) {
+        const x = 47 + i * 39;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.sin(state.t * .12 + i) * 5, H); ctx.stroke();
+      }
+      for (let i = 0; i < 5; i++) {
+        const y = screenY(i * 65 + 20, 0.42);
+        ctx.fillStyle = P.rust; ctx.fillRect(28, Math.round(y), 264, 2);
+      }
+      // Narrow bit of sky, intentionally almost swallowed by the walls.
+      ctx.fillStyle = P.black; ctx.fillRect(104, 0, 112, H);
+      for (let i = 0; i < 18; i++) {
+        const x = 108 + Math.floor(hash(8800 + i) * 106), y = Math.floor(hash(9000 + i) * 106);
+        ctx.fillStyle = i % 5 === 0 ? P.gold : P.blue; ctx.fillRect(x, y, 1 + (i % 2), 1);
+      }
+    }
+
+    function drawFarFacades() {
+      const phase = state.t / LOOP;
+      ctx.fillStyle = P.brick; ctx.fillRect(0, 0, 80, H); ctx.fillRect(240, 0, 80, H);
+      ctx.fillStyle = P.deep; ctx.fillRect(80, 0, 10, H); ctx.fillRect(230, 0, 10, H);
+      const first = Math.floor((state.cameraY - 58) / 28) * 28;
+      for (let worldY = first; worldY < state.cameraY + 280; worldY += 28) {
+        const sy = screenY(worldY, 1);
+        if (sy < -24 || sy > H + 24) continue;
+        const row = Math.round(worldY / 28);
+        for (const side of [0, 1]) {
+          const x0 = side ? 247 : 8;
+          const x = x0 + (Math.floor(hash(row * 31 + side * 400)) * 25);
+          const isBalcony = hash(row * 17 + side * 900) > .56;
+          const kind = hash(row * 19 + side * 37) > .7 ? 'vent' : 'window';
+          const tx = side ? 303 - (x - x0) : x;
+          drawTile(kind, tx, sy + 5, side === 1 && hash(row * 7 + 2) > .5);
+          if (awake(tx + 8, sy + 13) > .2) {
+            ctx.fillStyle = P.cream; ctx.fillRect(tx + 5, Math.round(sy + 8), 5, 4);
+            drawLightTile('window', tx + 1, sy + 1, .16 + awake(tx + 8, sy + 13) * .26);
+          }
+          if (isBalcony) drawTile('balcony', side ? 258 : 18, sy - 1, side === 1);
+          if (row % 3 === 0 && hash(row * 51 + side) > .3) drawTile('awning', side ? 276 : 27, sy + 13, side === 1);
+          if (kind === 'vent' && row % 4 === 0) {
+            // Small service fans turn independently of the camera and give the dark act a pulse.
+            const fx = side ? 283 : 31, fy = Math.round(sy + 8), spin = Math.floor(state.t * 4 + row) % 4;
+            ctx.fillStyle = P.ink; ctx.fillRect(fx - 3, fy - 3, 7, 7); ctx.fillStyle = P.smoke;
+            if (spin === 0 || spin === 2) { ctx.fillRect(fx - 3, fy, 7, 1); ctx.fillRect(fx, fy - 3, 1, 7); }
+            else { ctx.fillRect(fx - 2, fy - 2, 5, 1); ctx.fillRect(fx - 2, fy + 2, 5, 1); }
+            ctx.fillStyle = P.gold; ctx.fillRect(fx, fy, 1, 1);
+          }
+        }
+        ctx.fillStyle = row % 3 ? P.rust : P.smoke;
+        ctx.fillRect(0, Math.round(sy + 24), 79, 2); ctx.fillRect(241, Math.round(sy + 24), 79, 2);
+      }
+      // Slow maintenance elevators, with visible guide rails.
+      ctx.fillStyle = P.ink; ctx.fillRect(89, 0, 4, H); ctx.fillRect(227, 0, 4, H);
+      ctx.fillStyle = P.smoke; ctx.fillRect(90, 0, 1, H); ctx.fillRect(229, 0, 1, H);
+      const elevatorA = screenY((state.cameraY + 25 + state.t * 28) % WORLD_H, .9);
+      const elevatorB = screenY((state.cameraY + 142 - state.t * 19 + WORLD_H) % WORLD_H, .9);
+      for (const [x, y, c] of [[91, elevatorA, P.gold], [214, elevatorB, P.coral]]) {
+        ctx.fillStyle = P.ink; ctx.fillRect(x, Math.round(y), 15, 24);
+        ctx.fillStyle = c; ctx.fillRect(x + 2, Math.round(y + 3), 11, 2); ctx.fillRect(x + 3, Math.round(y + 8), 9, 10);
+        ctx.fillStyle = P.smoke; ctx.fillRect(x + 6, Math.round(y + 11), 3, 1);
+      }
+    }
+
+    function drawRoomsAndMarket() {
+      const phase = state.t / LOOP;
+      const first = Math.floor((state.cameraY - 50) / 52) * 52;
+      for (let worldY = first; worldY < state.cameraY + 280; worldY += 52) {
+        const sy = screenY(worldY, 1.03);
+        if (sy < -35 || sy > H + 35) continue;
+        const row = Math.round(worldY / 52);
+        const bridge = hash(row * 13 + 190) > .38;
+        if (bridge) {
+          ctx.fillStyle = row % 2 ? P.deep : P.brick; ctx.fillRect(68, Math.round(sy + 14), 184, 7);
+          ctx.fillStyle = P.rust; ctx.fillRect(74, Math.round(sy + 21), 5, 11); ctx.fillRect(241, Math.round(sy + 21), 5, 11);
+          for (let x = 85; x < 242; x += 22) {
+            drawTile('window', x, sy - 1);
+            if ((x + row) % 44 === 0 || awake(x + 8, sy + 7) > .2) {
+              ctx.fillStyle = P.gold; ctx.fillRect(x + 5, Math.round(sy + 3), 5, 5);
+              drawLightTile('lantern', x, sy - 1, .12 + awake(x + 8, sy + 7) * .22);
+            }
+          }
+          if (row % 4 === 0) { drawTile('stall', 100, sy + 3); drawTile('stall', 205, sy + 3, true); }
+        }
+        // Suspended cables give the eye a repeated vertical scale.
+        ctx.strokeStyle = P.smoke; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(76, Math.round(sy - 10)); ctx.quadraticCurveTo(160, Math.round(sy + 25), 244, Math.round(sy - 10)); ctx.stroke();
+        if (hash(row * 71) > .42) {
+          drawTile('lantern', 154 + Math.floor(hash(row * 73) * 18), sy + 3);
+          ctx.fillStyle = P.gold; ctx.fillRect(159, Math.round(sy + 18), 1, 11);
+        }
+      }
+      const marketRows = Math.floor((state.cameraY - 30) / 40) * 40;
+      for (let worldY = marketRows; worldY < state.cameraY + 250; worldY += 40) {
+        const sy = screenY(worldY, 1.08), row = Math.round(worldY / 40);
+        if (sy < -22 || sy > H + 22) continue;
+        const marketVisible = phase < .12 || phase > .30;
+        if (marketVisible && hash(row * 28 + 5) > .2) drawTile('stall', 22 + Math.floor(hash(row * 11) * 22), sy, false);
+        if (marketVisible && hash(row * 29 + 6) > .24) drawTile('stall', 262 - Math.floor(hash(row * 19) * 20), sy, true);
+        if (hash(row * 43 + 2) > .52) drawTile('person', 76 + Math.floor(hash(row * 49) * 20), sy + 1);
+        if (hash(row * 53 + 9) > .62) drawTile('person', 222 + Math.floor(hash(row * 59) * 18), sy + 1, true);
+      }
+      // A maintenance darkness settles in the middle act; the player lantern cuts a hole through it.
+      if (phase > .30 && phase < .48) {
+        ctx.fillStyle = 'rgba(11,9,17,.33)'; ctx.fillRect(0, 0, W, H);
+      }
+      // The hidden roof-gardens begin as teal pixels, then become legible to the lantern.
+      if (phase > .44) {
+        const firstGarden = Math.floor((state.cameraY - 45) / 76) * 76;
+        for (let worldY = firstGarden; worldY < state.cameraY + 280; worldY += 76) {
+          const sy = screenY(worldY, 1.1), row = Math.round(worldY / 76);
+          const reveal = awake(120, sy + 8) + awake(202, sy + 8);
+          if (sy > -30 && sy < H + 25) {
+            drawTile('plant', 96 + Math.floor(hash(row * 71) * 22), sy + 2);
+            drawTile('plant', 210 + Math.floor(hash(row * 73) * 15), sy + 2, true);
+            if (reveal > .1 || phase > .57) {
+              drawTile('glyph', 128 + Math.floor(hash(row * 79) * 52), sy - 2);
+              ctx.fillStyle = P.teal; ctx.fillRect(108, Math.round(sy + 12), 104, 2);
+            }
+          }
+        }
+      }
+    }
+
+    function drawCloseLayer() {
+      const sway = reducedMotion ? 0 : Math.sin(state.t * .8) * 3;
+      // Close verticals are intentionally over-scaled: they make the climb feel physical.
+      ctx.fillStyle = P.ink; ctx.fillRect(0, 0, 7, H); ctx.fillRect(313, 0, 7, H);
+      for (let i = 0; i < 5; i++) {
+        const x = 10 + i * 73 + sway + Math.sin(state.t * .17 + i) * 3;
+        ctx.fillStyle = i % 2 ? P.rust : P.smoke; ctx.fillRect(Math.round(x), 0, 3, H);
+        ctx.fillStyle = P.ink; ctx.fillRect(Math.round(x + 4), 0, 3, H);
+      }
+      const first = Math.floor((state.cameraY - 50) / 62) * 62;
+      for (let worldY = first; worldY < state.cameraY + 255; worldY += 62) {
+        const sy = screenY(worldY, 1.18), row = Math.round(worldY / 62);
+        if (sy < -30 || sy > H + 30) continue;
+        if (hash(row * 23) > .3) drawTile('pipe', 12 + Math.floor(hash(row * 31) * 28), sy - 18);
+        if (hash(row * 27) > .45) drawTile('pipe', 275 + Math.floor(hash(row * 37) * 28), sy - 22, true);
+        if (hash(row * 81) > .43) {
+          ctx.strokeStyle = P.cream; ctx.lineWidth = 1;
+          ctx.beginPath(); ctx.moveTo(0, Math.round(sy)); ctx.quadraticCurveTo(160, Math.round(sy + 16), 320, Math.round(sy - 4)); ctx.stroke();
+          if (state.t % 6 < 3 || reducedMotion) drawTile('person', 144 + Math.floor(hash(row * 83) * 20), sy - 11);
+        }
+      }
+      // Fabric pennants and laundry are always in motion, but only by a few pixels.
+      ctx.strokeStyle = P.smoke; ctx.lineWidth = 1;
+      for (let i = 0; i < 5; i++) {
+        const x = 82 + i * 33;
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x + Math.sin(state.t * .35 + i) * 5, H); ctx.stroke();
+        const yy = 30 + ((i * 41 + state.t * (8 + i)) % 130);
+        ctx.fillStyle = i % 2 ? P.cream : P.coral; ctx.fillRect(Math.round(x - 3), Math.round(yy), 12, 5);
+      }
+    }
+
+    function updateParticles(dt) {
+      for (const p of state.particles) {
+        p.y += p.speed * dt;
+        if (p.y > WORLD_H + 45) p.y = -45;
+      }
+    }
+    function drawParticles() {
+      const phase = state.t / LOOP;
+      for (const p of state.particles) {
+        const y = screenY(p.y, p.kind === 0 ? .92 : 1);
+        if (y < -10 || y > H + 10) continue;
+        const x = p.x + Math.sin(state.t * p.sway + p.phase) * (p.kind === 2 ? 9 : 3);
+        if (p.kind === 0 || p.kind === 1) { // steam / dust
+          ctx.fillStyle = p.kind === 0 ? P.smoke : P.cream; ctx.globalAlpha = p.kind === 0 ? .38 : .48;
+          ctx.fillRect(Math.round(x), Math.round(y), p.kind === 0 ? 2 : 1, p.kind === 0 ? 2 : 1); ctx.globalAlpha = 1;
+        } else if (p.kind === 2 && phase > .64) { // paper / birds in the dawn act
+          ctx.fillStyle = P.cream; ctx.fillRect(Math.round(x), Math.round(y), 4, 2);
+          ctx.fillStyle = P.rust; ctx.fillRect(Math.round(x + 3), Math.round(y - 1), 2, 1);
+        } else if (p.kind === 3 && phase < .58) { // insects around the market
+          ctx.fillStyle = P.gold; ctx.fillRect(Math.round(x), Math.round(y), 2, 1);
+        } else if (p.kind === 4 && phase > .72) { // tiny dawn silhouettes
+          ctx.fillStyle = P.ink; ctx.fillRect(Math.round(x), Math.round(y), 3, 1);
+        }
+      }
+      if (phase > .68) {
+        ctx.strokeStyle = P.cream; ctx.lineWidth = 1;
+        for (let i = 0; i < 4; i++) {
+          const bx = 100 + i * 42 + Math.sin(state.t * .4 + i) * 8;
+          const by = 36 + i * 21 + Math.cos(state.t * .24 + i) * 9;
+          ctx.beginPath(); ctx.moveTo(bx - 4, by); ctx.lineTo(bx, by - 2); ctx.lineTo(bx + 4, by); ctx.stroke();
+        }
+      }
+    }
+
+    function drawDawnAndOcclusion() {
+      const phase = state.t / LOOP;
+      if (phase > .66 && phase < .88) {
+        const a = clamp((phase - .66) * 2.5, 0, .48);
+        ctx.fillStyle = `rgba(214,95,86,${a})`; ctx.fillRect(0, 0, W, H);
+        ctx.fillStyle = P.gold; ctx.globalAlpha = a * .54; ctx.fillRect(92, 26, 136, 2); ctx.fillRect(104, 31, 112, 1); ctx.globalAlpha = 1;
+      }
+      if (phase > .84 && phase < .96) {
+        const a = (phase - .84) * 7;
+        ctx.fillStyle = P.cream; ctx.globalAlpha = clamp(a, 0, .25); ctx.fillRect(0, 0, W, 4); ctx.globalAlpha = 1;
+        ctx.fillStyle = P.rust; ctx.fillRect(0, 9, W, 2);
+      }
+      // Elevator doors briefly become the whole foreground at the loop seam.
+      if (phase >= .96) {
+        const q = (phase - .96) / .04;
+        const wipe = clamp(q * 1.18, 0, 1);
+        ctx.fillStyle = P.ink;
+        ctx.fillRect(0, 0, Math.round(W * wipe), H);
+        ctx.fillRect(W - Math.round(W * wipe), 0, Math.round(W * wipe), H);
+        ctx.fillStyle = P.rust; ctx.fillRect(Math.round(W * wipe) - 2, 0, 2, H); ctx.fillRect(W - Math.round(W * wipe), 0, 2, H);
+        if (q > .46) { ctx.fillStyle = P.gold; ctx.fillRect(154, 0, 12, H); ctx.fillStyle = P.cream; ctx.fillRect(159, 0, 2, H); }
+      }
+    }
+
+    function drawAtmosphere() {
+      light.clearRect(0, 0, W, H);
+      light.globalCompositeOperation = 'lighter';
+      // Ambient lanterns are sparse and hand-placed, rather than a smooth modern bloom.
+      for (let i = 0; i < 14; i++) {
+        const x = 18 + (i * 47) % 287;
+        const y = screenY((Math.floor(state.cameraY / 44) * 44) + (i % 6) * 44 + 10, 1.02);
+        if (y < -20 || y > H + 20) continue;
+        const pulse = .18 + (Math.sin(state.t * 1.7 + i * 2.1) * .5 + .5) * .12;
+        light.fillStyle = P.gold; light.globalAlpha = pulse;
+        light.fillRect(x, Math.round(y), 2, 2);
+      }
+      if (state.pointer.active) {
+        const r = 16 + Math.sin(state.t * 2) * 1.5;
+        const grad = light.createRadialGradient(state.pointer.x, state.pointer.y, 1, state.pointer.x, state.pointer.y, r * 2.8);
+        grad.addColorStop(0, 'rgba(244,214,160,.56)'); grad.addColorStop(.22, 'rgba(230,163,76,.34)'); grad.addColorStop(1, 'rgba(230,163,76,0)');
+        light.globalAlpha = 1; light.fillStyle = grad; light.fillRect(state.pointer.x - r * 3, state.pointer.y - r * 3, r * 6, r * 6);
+        light.strokeStyle = P.cream; light.globalAlpha = .75; light.strokeRect(Math.round(state.pointer.x - r), Math.round(state.pointer.y - r), Math.round(r * 2), Math.round(r * 2));
+      }
+      for (const p of state.pulses) {
+        const y = screenY(p.worldY, 1), r = 16 + p.age * 74;
+        if (y < -r || y > H + r) continue;
+        light.globalAlpha = clamp((1 - p.age / 3.4) * .42, 0, .42); light.strokeStyle = P.gold; light.lineWidth = 2;
+        light.strokeRect(Math.round(p.x - r), Math.round(y - r * .42), Math.round(r * 2), Math.round(r * .84));
+      }
+      light.globalAlpha = 1; light.globalCompositeOperation = 'source-over';
+      ctx.save(); ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = .78; ctx.drawImage(lightCanvas, 0, 0); ctx.restore();
+    }
+
+    function drawOverlay() {
+      // CRT mask and deterministic dither keep the upscale feeling like a small display.
+      ctx.fillStyle = 'rgba(11,9,17,.14)';
+      for (let y = 1; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+      for (const [x, y, n] of grain) {
+        if ((n + Math.floor(state.t * (reducedMotion ? 0.4 : 2))) % 7 < 2) {
+          ctx.fillStyle = n % 2 ? 'rgba(244,214,160,.09)' : 'rgba(11,9,17,.12)'; ctx.fillRect(x, y, 1, 1);
+        }
+      }
+      const v = ctx.createRadialGradient(160, 90, 42, 160, 90, 160);
+      v.addColorStop(0, 'rgba(11,9,17,0)'); v.addColorStop(1, 'rgba(11,9,17,.48)'); ctx.fillStyle = v; ctx.fillRect(0, 0, W, H);
+      if (state.hint > .01) {
+        ctx.fillStyle = `rgba(244,214,160,${clamp(state.hint, 0, .86)})`;
+        ctx.font = '6px monospace'; ctx.textBaseline = 'bottom';
+        ctx.fillText('MOVE LIGHT  •  CLICK: WAKE BLOCK  •  ↑↓: DRIFT  •  R: RESET', 8, 174);
+      }
+      ctx.fillStyle = P.cream; ctx.globalAlpha = .58; ctx.font = '6px monospace'; ctx.textBaseline = 'top';
+      ctx.fillText('UPWARD MARKET // ' + String(Math.floor(state.t)).padStart(2, '0') + 's', 8, 6); ctx.globalAlpha = 1;
+    }
+
+    function render() {
+      drawBackdrop(); drawFarFacades(); drawRoomsAndMarket(); drawCloseLayer(); drawParticles(); drawDawnAndOcclusion();
+      drawAtmosphere(); drawOverlay();
+    }
+
+    function wake(x, y) {
+      state.pulses.push({ x: clamp(x, 0, W), worldY: state.cameraY + (H - clamp(y, 0, H)), age: 0 });
+      if (state.pulses.length > 4) state.pulses.shift();
+      state.hint = 1;
+    }
+    function reset() {
+      state.t = 0; state.cameraY = 0; state.speed = 1; state.hint = 1; state.pulses.length = 0;
+      for (let i = 0; i < state.particles.length; i++) {
+        state.particles[i].x = hash(1200 + i) * 320; state.particles[i].y = hash(1500 + i) * WORLD_H;
+      }
+    }
+    function pointerPosition(e) {
+      const r = canvas.getBoundingClientRect();
+      state.pointer.x = clamp((e.clientX - r.left) * W / r.width, 0, W);
+      state.pointer.y = clamp((e.clientY - r.top) * H / r.height, 0, H);
+    }
+    canvas.addEventListener('pointermove', e => { pointerPosition(e); state.pointer.active = true; state.hint = 1; });
+    canvas.addEventListener('pointerenter', e => { pointerPosition(e); state.pointer.active = true; });
+    canvas.addEventListener('pointerleave', () => { state.pointer.active = false; });
+    canvas.addEventListener('pointerdown', e => { pointerPosition(e); state.pointer.active = true; wake(state.pointer.x, state.pointer.y); canvas.focus(); });
+    canvas.addEventListener('touchstart', e => { const t = e.changedTouches[0]; if (t) { pointerPosition(t); state.pointer.active = true; wake(state.pointer.x, state.pointer.y); } }, { passive: true });
+    canvas.addEventListener('keydown', e => {
+      if (e.key === 'ArrowUp') { state.speed = clamp(state.speed + .15, .35, 2); state.hint = 1; e.preventDefault(); }
+      if (e.key === 'ArrowDown') { state.speed = clamp(state.speed - .15, .35, 2); state.hint = 1; e.preventDefault(); }
+      if (e.key === 'Enter' || e.key === ' ') { wake(state.pointer.active ? state.pointer.x : 160, state.pointer.active ? state.pointer.y : 90); e.preventDefault(); }
+      if (e.key.toLowerCase() === 'r') { reset(); e.preventDefault(); }
+    });
+    document.addEventListener('visibilitychange', () => { state.hidden = document.hidden; state.last = performance.now(); });
+    window.addEventListener('resize', () => { state.last = performance.now(); });
+
+    function frame(now) {
+      requestAnimationFrame(frame);
+      if (state.hidden) return;
+      let dt = Math.min(.08, Math.max(0, (now - state.last) / 1000)); state.last = now;
+      if (!Number.isFinite(dt)) dt = 0;
+      state.t += dt;
+      const move = reducedMotion ? Math.min(state.speed, .32) : state.speed;
+      state.cameraY += dt * 27 * move;
+      updateParticles(dt * (reducedMotion ? .45 : 1));
+      for (const p of state.pulses) p.age += dt;
+      state.pulses = state.pulses.filter(p => p.age < 3.4);
+      if (state.t >= LOOP) { state.t %= LOOP; state.cameraY = 0; state.pulses.length = 0; }
+      state.hint = Math.max(0, state.hint - dt * .045);
+      render();
+    }
+    canvas.focus({ preventScroll: true });
+    render();
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>

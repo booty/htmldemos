@@ -1,0 +1,709 @@
+<!doctype html>
+<!-- All visual assets are original and generated procedurally in this file. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" href="data:,">
+  <title>Rainline Overpass — Midnight Courier</title>
+  <style>
+    :root { color-scheme: dark; background: #050812; }
+    * { box-sizing: border-box; }
+    html, body { min-height: 100%; margin: 0; }
+    body {
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      background: #050812;
+      color: #c7f8ef;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    main {
+      position: relative;
+      width: min(96vw, calc(96vh * 16 / 9));
+      aspect-ratio: 16 / 9;
+      filter: drop-shadow(0 14px 32px rgba(0, 0, 0, .55));
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+      image-rendering: pixelated;
+      image-rendering: crisp-edges;
+      background: #080d1b;
+      outline: none;
+    }
+    canvas:focus-visible { outline: 2px solid #f3c466; outline-offset: 4px; }
+    .fallback {
+      position: absolute;
+      inset: 0;
+      display: none;
+      place-items: center;
+      padding: 2rem;
+      color: #f3c466;
+      background: #080d1b;
+      text-align: center;
+      line-height: 1.6;
+      font-size: clamp(12px, 2vw, 18px);
+    }
+    .fallback.visible { display: grid; }
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <canvas id="scene" width="384" height="216" tabindex="0" role="img"
+      aria-label="Rainline Overpass: a looping pixel-art night city with a courier, rain, traffic and an enormous elevated interchange"></canvas>
+    <div id="fallback" class="fallback" role="status">
+      This pixel scene needs a browser with Canvas 2D support. Try a current version of Chrome, Firefox, Safari, or Edge.
+    </div>
+    <p id="instructions" class="sr-only">
+      Move the pointer across the scene to bend the rain and shift the camera. Hold the pointer, or hold Space, to speed the near layers.
+      Press R to reset the deterministic 42 second loop. The animation slows when reduced motion is requested.
+    </p>
+  </main>
+  <script>
+  (() => {
+    'use strict';
+
+    const canvas = document.getElementById('scene');
+    const fallback = document.getElementById('fallback');
+    const ctx = canvas.getContext && canvas.getContext('2d', { alpha: false });
+    const W = 384;
+    const H = 216;
+    const LOOP = 42;
+    const SEED = 0x51A7E11;
+    const SPEEDS = Object.freeze({ sky: 0.03, distant: 0.08, city: 0.18, overpass: 0.42, traffic: 0.8, foreground: 1.35 });
+    const PALETTE = Object.freeze({
+      void: '#060a16', ink: '#0a1022', deep: '#101a32', blue: '#18294a', haze: '#2e4c69',
+      mist: '#5f8292', rain: '#8dd8d0', cold: '#baf5df', cyan: '#43c9c0',
+      amber: '#f3bd67', coral: '#ef6f65', red: '#bd385a', violet: '#714b83', road: '#11182b'
+    });
+
+    if (!ctx) {
+      canvas.style.display = 'none';
+      fallback.classList.add('visible');
+      return;
+    }
+
+    const reducedQuery = window.matchMedia ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+    let reducedMotion = !!(reducedQuery && reducedQuery.matches);
+    if (reducedQuery && reducedQuery.addEventListener) reducedQuery.addEventListener('change', e => { reducedMotion = e.matches; });
+
+    const makeBuffer = (width, height) => {
+      const b = document.createElement('canvas');
+      b.width = width;
+      b.height = height;
+      return b;
+    };
+    const skyLayer = makeBuffer(W, H);
+    const distantLayer = makeBuffer(W * 2, H);
+    const cityLayer = makeBuffer(W * 2, H);
+    const interchangeLayer = makeBuffer(W * 2, H);
+    const skyCtx = skyLayer.getContext('2d');
+    const distantCtx = distantLayer.getContext('2d');
+    const cityCtx = cityLayer.getContext('2d');
+    const interchangeCtx = interchangeLayer.getContext('2d');
+
+    function rng(seed) {
+      let value = seed >>> 0;
+      return () => {
+        value += 0x6D2B79F5;
+        let t = value;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+    const random = rng(SEED);
+    const clamp = (v, lo = 0, hi = 1) => Math.max(lo, Math.min(hi, v));
+    const smooth = v => { v = clamp(v); return v * v * (3 - 2 * v); };
+    const wrap = (v, span) => ((v % span) + span) % span;
+    const lerp = (a, b, n) => a + (b - a) * n;
+    const hash = n => {
+      let x = (n ^ SEED) | 0;
+      x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+      x = Math.imul(x ^ (x >>> 16), 0x45d9f3b);
+      return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+    };
+
+    const farTowers = [];
+    const blocks = [];
+    const supports = [];
+    const traffic = [];
+    const rain = [];
+    const puddles = [];
+    for (let i = 0; i < 34; i++) {
+      farTowers.push({ x: random() * W * 2, w: 3 + random() * 10, h: 12 + random() * 54, roof: random(), tone: random() });
+    }
+    for (let i = 0; i < 22; i++) {
+      blocks.push({ x: random() * W * 2, w: 12 + random() * 24, h: 22 + random() * 45, rows: 4 + (random() * 5 | 0), cols: 2 + (random() * 4 | 0), roof: random(), seed: random() * 99 });
+    }
+    for (let i = 0; i < 13; i++) {
+      supports.push({ x: random() * W * 2, w: 4 + random() * 6, top: 100 + random() * 20, lean: (random() - .5) * 9 });
+    }
+    for (let i = 0; i < 24; i++) {
+      traffic.push({ x: random() * W * 2, y: 111 + (random() * 26 | 0), length: 3 + random() * 8, speed: .4 + random() * 1.2, color: random() > .58 ? PALETTE.amber : PALETTE.coral, lane: random() > .5 ? 1 : -1, pulse: random() * 9 });
+    }
+    for (let i = 0; i < 190; i++) {
+      rain.push({ x: random() * W, y: random() * H, z: .15 + random() * .85, length: 4 + random() * 10, phase: random() * 12, opacity: .18 + random() * .52 });
+    }
+    for (let i = 0; i < 24; i++) {
+      puddles.push({ x: random() * W, y: 190 + random() * 22, rx: 3 + random() * 12, ry: .7 + random() * 2.5, phase: random() * 8 });
+    }
+
+    function buildSky() {
+      const g = skyCtx.createLinearGradient(0, 0, 0, H);
+      g.addColorStop(0, '#080d1e');
+      g.addColorStop(.42, '#132447');
+      g.addColorStop(.75, '#29455f');
+      g.addColorStop(1, '#4a6574');
+      skyCtx.fillStyle = g;
+      skyCtx.fillRect(0, 0, W, H);
+      const bands = ['#0a1126', '#0d1831', '#11213e', '#172d4c', '#1c3654', '#25425c'];
+      for (let y = 0; y < 130; y += 4) {
+        skyCtx.fillStyle = bands[(y / 4 | 0) % bands.length];
+        skyCtx.globalAlpha = .13;
+        skyCtx.fillRect(0, y, W, 4);
+      }
+      skyCtx.globalAlpha = 1;
+      // Fixed dither is part of the sky texture, not per-frame noise.
+      for (let y = 22; y < 120; y += 3) {
+        for (let x = (y % 2) * 2; x < W; x += 4) {
+          if (hash(x * 13 + y * 71) > .72) {
+            skyCtx.fillStyle = hash(x * 3 + y * 17) > .55 ? '#34506a' : '#203a58';
+            skyCtx.globalAlpha = .23;
+            skyCtx.fillRect(x, y, 1, 1);
+          }
+        }
+      }
+      skyCtx.globalAlpha = 1;
+      for (let i = 0; i < 78; i++) {
+        const x = hash(i * 19 + 1) * W;
+        const y = 13 + hash(i * 23 + 5) * 76;
+        const s = hash(i * 29 + 9) > .76 ? 2 : 1;
+        skyCtx.fillStyle = hash(i * 37 + 3) > .83 ? PALETTE.amber : '#73adb0';
+        skyCtx.globalAlpha = .18 + hash(i * 41 + 8) * .42;
+        skyCtx.fillRect(x | 0, y | 0, s, s);
+      }
+      skyCtx.globalAlpha = 1;
+      // Long, quiet cloud banks make the horizon legible before the rain arrives.
+      skyCtx.fillStyle = '#0a142a';
+      skyCtx.globalAlpha = .72;
+      skyCtx.beginPath();
+      skyCtx.moveTo(0, 71);
+      skyCtx.lineTo(34, 63); skyCtx.lineTo(74, 70); skyCtx.lineTo(124, 59);
+      skyCtx.lineTo(180, 73); skyCtx.lineTo(224, 60); skyCtx.lineTo(280, 70);
+      skyCtx.lineTo(327, 58); skyCtx.lineTo(W, 68); skyCtx.lineTo(W, 103); skyCtx.lineTo(0, 103);
+      skyCtx.closePath(); skyCtx.fill();
+      skyCtx.globalAlpha = .34;
+      skyCtx.fillStyle = '#52748a';
+      for (let i = 0; i < 31; i++) {
+        const x = hash(i * 113 + 7) * W;
+        const y = 76 + hash(i * 127 + 4) * 18;
+        skyCtx.fillRect(x, y, 5 + hash(i * 131) * 21, 1);
+      }
+      skyCtx.globalAlpha = 1;
+    }
+
+    function buildDistant() {
+      distantCtx.clearRect(0, 0, W * 2, H);
+      distantCtx.fillStyle = '#0b1427';
+      distantCtx.fillRect(0, 100, W * 2, 80);
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < farTowers.length; i++) {
+          const b = farTowers[i];
+          const x = b.x + pass * W;
+          const y = 100 - b.h;
+          distantCtx.fillStyle = b.tone > .7 ? '#162a43' : (b.tone > .35 ? '#11223a' : '#0d1b31');
+          distantCtx.fillRect(x, y, b.w, b.h);
+          if (b.roof > .55) { distantCtx.fillStyle = '#35546b'; distantCtx.fillRect(x + b.w * .5, y - 4, 1, 4); }
+          if (b.roof < .22) { distantCtx.fillStyle = '#466171'; distantCtx.fillRect(x + 1, y + 3, Math.max(1, b.w - 3), 1); }
+          distantCtx.fillStyle = b.tone > .52 ? '#6e9f9c' : '#3a6572';
+          distantCtx.globalAlpha = .36;
+          for (let wy = y + 7; wy < 97; wy += 6) {
+            if (hash(i * 101 + wy * 7) > .67) distantCtx.fillRect(x + 1 + (hash(i * 17 + wy) * Math.max(1, b.w - 3)), wy, 1, 1);
+          }
+          distantCtx.globalAlpha = 1;
+        }
+      }
+      distantCtx.fillStyle = '#0b1325';
+      distantCtx.fillRect(0, 99, W * 2, 4);
+    }
+
+    function buildCity() {
+      cityCtx.clearRect(0, 0, W * 2, H);
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < blocks.length; i++) {
+          const b = blocks[i];
+          const x = b.x + pass * W;
+          const y = 178 - b.h;
+          cityCtx.fillStyle = i % 3 === 0 ? '#101a2e' : '#0c1628';
+          cityCtx.fillRect(x, y, b.w, b.h);
+          cityCtx.fillStyle = '#192842';
+          cityCtx.fillRect(x, y, b.w, 2);
+          if (b.roof > .74) {
+            cityCtx.fillStyle = '#31516b';
+            cityCtx.fillRect(x + 2, y - 2, b.w - 4, 2);
+          }
+          if (b.roof < .2) {
+            cityCtx.fillStyle = '#27445c';
+            cityCtx.fillRect(x + b.w * .42, y - 5, 2, 5);
+          }
+        }
+      }
+      cityCtx.fillStyle = '#0a1121';
+      cityCtx.fillRect(0, 177, W * 2, 8);
+    }
+
+    function buildInterchange() {
+      interchangeCtx.clearRect(0, 0, W * 2, H);
+      for (let pass = 0; pass < 2; pass++) {
+        for (let i = 0; i < supports.length; i++) {
+          const s = supports[i];
+          const x = s.x + pass * W;
+          interchangeCtx.fillStyle = i % 2 ? '#10192a' : '#141e31';
+          interchangeCtx.beginPath();
+          interchangeCtx.moveTo(x, s.top);
+          interchangeCtx.lineTo(x + s.w, s.top);
+          interchangeCtx.lineTo(x + s.w + s.lean, 199);
+          interchangeCtx.lineTo(x + s.lean, 199);
+          interchangeCtx.closePath();
+          interchangeCtx.fill();
+          interchangeCtx.fillStyle = '#294056';
+          interchangeCtx.fillRect(x + 1, s.top, s.w - 2, 2);
+          interchangeCtx.fillStyle = '#0a1120';
+          interchangeCtx.fillRect(x + 2, s.top + 11, Math.max(1, s.w - 4), 2);
+        }
+        interchangeCtx.fillStyle = '#111829';
+        interchangeCtx.fillRect(pass * W - 1, 98, W + 2, 8);
+        interchangeCtx.fillStyle = '#315368';
+        interchangeCtx.fillRect(pass * W, 98, W, 2);
+        interchangeCtx.fillStyle = '#0a101e';
+        interchangeCtx.fillRect(pass * W, 106, W, 3);
+        // Bolted underbelly: tiny repetitions sell the giant span.
+        interchangeCtx.fillStyle = '#486178';
+        for (let x = pass * W + 7; x < pass * W + W; x += 17) interchangeCtx.fillRect(x, 108, 3, 1);
+      }
+    }
+
+    buildSky();
+    buildDistant();
+    buildCity();
+    buildInterchange();
+
+    const state = {
+      elapsed: 0,
+      last: performance.now(),
+      paused: false,
+      pointerX: .5,
+      pointerY: .5,
+      wind: 0,
+      held: false,
+      hint: 1,
+      focus: false
+    };
+
+    function reset() {
+      state.elapsed = 0;
+      state.last = performance.now();
+      state.pointerX = .5;
+      state.pointerY = .5;
+      state.wind = 0;
+      state.held = false;
+      state.hint = 1;
+    }
+    function eventPoint(e) {
+      const rect = canvas.getBoundingClientRect();
+      state.pointerX = clamp((e.clientX - rect.left) / rect.width);
+      state.pointerY = clamp((e.clientY - rect.top) / rect.height);
+      state.wind = (state.pointerX - .5) * 2;
+      state.hint = 1;
+    }
+    canvas.addEventListener('pointermove', eventPoint);
+    canvas.addEventListener('pointerdown', e => { eventPoint(e); state.held = true; canvas.setPointerCapture?.(e.pointerId); });
+    canvas.addEventListener('pointerup', () => { state.held = false; });
+    canvas.addEventListener('pointercancel', () => { state.held = false; });
+    canvas.addEventListener('pointerleave', () => { if (!state.held) { state.wind *= .85; } });
+    canvas.addEventListener('focus', () => { state.focus = true; state.hint = 1; });
+    canvas.addEventListener('blur', () => { state.focus = false; });
+    window.addEventListener('keydown', e => {
+      if (e.code === 'Space') { e.preventDefault(); state.held = true; state.hint = 1; }
+      if (e.key && e.key.toLowerCase() === 'r') { e.preventDefault(); reset(); }
+    });
+    window.addEventListener('keyup', e => { if (e.code === 'Space') state.held = false; });
+    document.addEventListener('visibilitychange', () => {
+      state.paused = document.hidden;
+      state.last = performance.now();
+    });
+
+    function phaseAmount(t, start, end) {
+      return smooth(clamp((t - start) / (end - start)));
+    }
+    function lightningAt(t) {
+      if (reducedMotion) return 0;
+      const events = [2.15, 28.05, 30.55, 40.05];
+      let amount = 0;
+      for (const at of events) amount = Math.max(amount, Math.exp(-Math.pow((t - at) / .18, 2)));
+      return amount;
+    }
+    function powerAt(t, x) {
+      let power = 1;
+      if (t >= 33 && t < 39) {
+        const down = phaseAmount(t, 33, 34.3);
+        power *= lerp(1, .22, down);
+        power *= .86 + .14 * Math.sin(t * 18 + x * .1);
+      }
+      if (t >= 39) {
+        const returnWave = clamp((t - 39) / 2.2);
+        const local = clamp(returnWave * 1.35 - wrap(x + t * 17, 126) / 126);
+        power = Math.max(power, smooth(local));
+      }
+      return clamp(power, .04, 1);
+    }
+    function speedMul() { return state.held ? 1.75 : 1; }
+    function offsetFor(speed, t) {
+      const nearBoost = state.held && speed >= SPEEDS.overpass ? 1.9 : 1;
+      return t * speed * 25 * nearBoost;
+    }
+    function tileLayer(layer, offset) {
+      const x = -wrap(offset, W * 2);
+      ctx.drawImage(layer, x, 0);
+      ctx.drawImage(layer, x + W * 2, 0);
+    }
+
+    function drawDistant(t) {
+      tileLayer(distantLayer, offsetFor(SPEEDS.distant, t));
+    }
+
+    function drawCity(t) {
+      const off = offsetFor(SPEEDS.city, t);
+      tileLayer(cityLayer, off);
+      const wake = phaseAmount(t, 4, 11);
+      for (let pass = -1; pass <= 2; pass++) {
+        for (let i = 0; i < blocks.length; i++) {
+          const b = blocks[i];
+          const x = b.x + pass * W - wrap(off, W * 2);
+          if (x < -b.w - 4 || x > W + 4) continue;
+          const y = 178 - b.h;
+          const power = powerAt(t, x);
+          for (let row = 0; row < b.rows; row++) {
+            for (let col = 0; col < b.cols; col++) {
+              const threshold = hash((i + 2) * 79 + row * 31 + col * 17);
+              const pulse = .48 + .52 * Math.sin(t * (.75 + threshold * .8) + b.seed + row * .7 + col);
+              const lit = wake * power * (.45 + pulse * .5) > threshold * .78;
+              if (!lit) continue;
+              ctx.fillStyle = threshold > .82 ? PALETTE.amber : (threshold > .58 ? '#d5a56a' : '#5ac5b6');
+              ctx.globalAlpha = (.3 + wake * .66) * power;
+              ctx.fillRect(x + 3 + col * ((b.w - 5) / b.cols), y + 6 + row * 7, 2, 2);
+            }
+          }
+        }
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#172844';
+      ctx.fillRect(0, 176, W, 2);
+    }
+
+    function drawInterchange(t, reveal) {
+      const off = offsetFor(SPEEDS.overpass, t);
+      tileLayer(interchangeLayer, off);
+      const warning = phaseAmount(t, 18, 27);
+      const cameraY = state.held ? 4 : 0;
+      // Colossal unfinished loops emerge in the lightning window.
+      ctx.save();
+      ctx.translate(0, cameraY);
+      if (reveal > 0) {
+        ctx.globalAlpha = .2 + reveal * .52;
+        ctx.strokeStyle = '#4e7581';
+        ctx.lineWidth = 5;
+        ctx.beginPath();
+        ctx.arc(74, 119, 93, Math.PI * 1.04, Math.PI * 1.9);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(332, 116, 108, Math.PI * 1.15, Math.PI * 1.94);
+        ctx.stroke();
+        ctx.globalAlpha = .35 + reveal * .45;
+        ctx.strokeStyle = '#17293c';
+        ctx.lineWidth = 10;
+        ctx.beginPath();
+        ctx.arc(70, 118, 96, Math.PI * 1.02, Math.PI * 1.89);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(334, 116, 111, Math.PI * 1.15, Math.PI * 1.93);
+        ctx.stroke();
+        ctx.fillStyle = PALETTE.coral;
+        ctx.globalAlpha = reveal * .65;
+        for (let i = 0; i < 8; i++) {
+          const a = Math.PI * (1.12 + i * .1);
+          ctx.fillRect(74 + Math.cos(a) * 93, 119 + Math.sin(a) * 93, 2, 2);
+        }
+      }
+      // Warning lamps travel leftward across the active deck.
+      ctx.fillStyle = PALETTE.coral;
+      for (let i = 0; i < 25; i++) {
+        const x = wrap(i * 21 - t * 42, W);
+        const pulse = .25 + .75 * Math.max(0, Math.sin(t * 5 - i * .8));
+        ctx.globalAlpha = warning * pulse * .8;
+        ctx.fillRect(x, 101, 3, 1);
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function drawTrain(t, cameraY) {
+      const active = clamp(1 - Math.abs(t - 14.2) / 4.4);
+      if (active <= 0) return;
+      const slow = t > 33 && t < 39 ? .25 : 1;
+      const x = 438 - wrap((t - 10.5) * 62 * slow, 516);
+      const y = 88 + cameraY;
+      ctx.save();
+      ctx.globalAlpha = .26 + active * .74;
+      ctx.fillStyle = '#080d18';
+      ctx.fillRect(x - 6, y + 11, 92, 3);
+      ctx.fillStyle = '#1a2e43';
+      ctx.fillRect(x, y, 80, 11);
+      ctx.fillStyle = '#3c6370';
+      ctx.fillRect(x + 3, y + 1, 74, 2);
+      ctx.fillStyle = '#0c1728';
+      ctx.fillRect(x + 4, y + 4, 70, 5);
+      for (let i = 0; i < 5; i++) {
+        const wx = x + 8 + i * 13;
+        ctx.fillStyle = (i + (t * 2 | 0)) % 3 === 0 ? PALETTE.amber : '#6faeaa';
+        ctx.globalAlpha = (.35 + .35 * Math.sin(t * 8 + i)) * active;
+        ctx.fillRect(wx, y + 5, 7, 2);
+      }
+      ctx.globalAlpha = active;
+      ctx.fillStyle = PALETTE.coral;
+      ctx.fillRect(x + 1, y + 10, 78, 1);
+      ctx.restore();
+    }
+
+    function drawTraffic(t, cameraY) {
+      const off = offsetFor(SPEEDS.traffic, t);
+      for (let i = 0; i < traffic.length; i++) {
+        const car = traffic[i];
+        const direction = car.lane;
+        const x = wrap(car.x - off * car.speed * direction, W + 20) - 10;
+        const y = car.y + cameraY;
+        const blink = .35 + .65 * Math.max(0, Math.sin(t * 5 + car.pulse));
+        ctx.fillStyle = '#0a0f1d';
+        ctx.globalAlpha = .75;
+        ctx.fillRect(x - (direction < 0 ? car.length : 0), y, car.length, 2);
+        ctx.fillStyle = car.color;
+        ctx.globalAlpha = .35 + blink * .55;
+        ctx.fillRect(direction < 0 ? x - 1 : x + car.length - 1, y, 2, 1);
+      }
+      ctx.globalAlpha = 1;
+      ctx.fillStyle = '#26384e';
+      ctx.fillRect(0, 139 + cameraY, W, 2);
+    }
+
+    function drawForeground(t, cameraY) {
+      const off = offsetFor(SPEEDS.foreground, t);
+      ctx.save();
+      ctx.translate(0, cameraY);
+      ctx.fillStyle = '#080d19';
+      ctx.fillRect(0, 183, W, 33);
+      // Distant wet street bands.
+      ctx.fillStyle = '#172237';
+      ctx.fillRect(0, 184, W, 2);
+      ctx.fillStyle = '#21364a';
+      ctx.globalAlpha = .6;
+      ctx.fillRect(0, 197, W, 1);
+      ctx.fillRect(0, 209, W, 1);
+      ctx.globalAlpha = 1;
+      // Repeating guardrail and cables, with a perspective break at the courier.
+      ctx.strokeStyle = '#3c6671';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, 171); ctx.lineTo(W, 180);
+      ctx.moveTo(0, 177); ctx.lineTo(W, 187);
+      ctx.stroke();
+      ctx.strokeStyle = '#162f40';
+      ctx.lineWidth = 1;
+      for (let x = -wrap(off, 34) - 25; x < W + 25; x += 34) {
+        ctx.beginPath(); ctx.moveTo(x, 171); ctx.lineTo(x + 7, 203); ctx.stroke();
+      }
+      // Reflection pools are deliberately simple, like painted sprites.
+      for (let i = 0; i < puddles.length; i++) {
+        const p = puddles[i];
+        const x = wrap(p.x - off * .55, W);
+        ctx.fillStyle = i % 3 === 0 ? PALETTE.coral : (i % 3 === 1 ? PALETTE.cyan : PALETTE.amber);
+        ctx.globalAlpha = .06 + .04 * Math.sin(t * 2 + p.phase);
+        ctx.beginPath(); ctx.ellipse(x, p.y, p.rx, p.ry, 0, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = '#5d8490';
+        ctx.globalAlpha = .26;
+        ctx.fillRect(x - p.rx * .7, p.y, p.rx * 1.4, 1);
+      }
+      ctx.globalAlpha = 1;
+      // The courier: one compact silhouette, a cyan rain-shell edge, and a parcel.
+      const courierX = 72 + Math.sin(t * .8) * 1.5 - state.wind * 3;
+      const courierY = 177 + Math.sin(t * 1.5) * .4;
+      ctx.fillStyle = '#060a13';
+      ctx.fillRect(courierX - 5, courierY + 8, 11, 16);
+      ctx.fillRect(courierX - 8, courierY + 23, 6, 2);
+      ctx.fillRect(courierX + 3, courierY + 23, 7, 2);
+      ctx.beginPath(); ctx.arc(courierX, courierY + 4, 5, 0, Math.PI * 2); ctx.fill();
+      ctx.fillStyle = '#2e9e9b';
+      ctx.fillRect(courierX - 5, courierY + 9, 2, 12);
+      ctx.fillStyle = PALETTE.amber;
+      ctx.fillRect(courierX + 5, courierY + 13, 7, 6);
+      ctx.fillStyle = '#f1bd69';
+      ctx.fillRect(courierX - 2, courierY + 2, 5, 1);
+      // Near cable: fastest parallax layer.
+      ctx.strokeStyle = '#6aaeb0';
+      ctx.globalAlpha = .65;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(-18 - wrap(off, 82), 151); ctx.quadraticCurveTo(112, 172, W + 22, 151); ctx.stroke();
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function drawRain(t, storm, cameraY) {
+      const count = reducedMotion ? 84 : 174;
+      const intensity = lerp(.62, 1.4, storm) * (reducedMotion ? .55 : 1);
+      const wind = state.wind * 4.5;
+      const flatten = state.held ? .28 : 1;
+      ctx.save();
+      ctx.translate(0, cameraY * .25);
+      ctx.lineCap = 'square';
+      for (let i = 0; i < count; i++) {
+        const p = rain[i];
+        const fall = (t * (22 + p.z * 38) * intensity + p.phase * 13) % (H + 28);
+        const y = wrap(p.y + fall, H + 24) - 12;
+        const x = wrap(p.x - t * wind * (p.z + .25) - fall * (wind * .04), W + 20) - 10;
+        const len = p.length * (.6 + p.z * .7) * (1 + (state.held ? 1.15 : 0));
+        ctx.strokeStyle = p.z > .65 ? PALETTE.cold : PALETTE.rain;
+        ctx.globalAlpha = p.opacity * (.3 + p.z * .45) * (storm > .1 ? 1 : .75);
+        ctx.lineWidth = p.z > .73 ? 1 : 0.6;
+        ctx.beginPath();
+        ctx.moveTo(x, y);
+        ctx.lineTo(x + wind * p.z * flatten - 1.5, y + len);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.restore();
+    }
+
+    function drawLightning(t, amount, reveal) {
+      if (reducedMotion) {
+        if (reveal > 0) {
+          ctx.globalAlpha = reveal * .26;
+          ctx.fillStyle = '#9edbd0';
+          ctx.fillRect(234, 24, 1, 56);
+          ctx.globalAlpha = 1;
+        }
+        return;
+      }
+      if (amount <= .01) return;
+      ctx.save();
+      ctx.globalAlpha = amount * .78;
+      ctx.strokeStyle = PALETTE.cold;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(252, 5); ctx.lineTo(244, 27); ctx.lineTo(251, 25); ctx.lineTo(239, 52); ctx.lineTo(245, 49); ctx.lineTo(232, 78);
+      ctx.stroke();
+      ctx.strokeStyle = '#6fbcb8';
+      ctx.globalAlpha = amount * .32;
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.globalAlpha = amount * .13;
+      ctx.fillStyle = '#a8e8d8';
+      ctx.fillRect(0, 0, W, H);
+      ctx.restore();
+    }
+
+    function drawScanlines(t) {
+      ctx.globalAlpha = .1;
+      ctx.fillStyle = '#02040a';
+      for (let y = 1; y < H; y += 3) ctx.fillRect(0, y, W, 1);
+      ctx.globalAlpha = .1;
+      ctx.fillStyle = '#7bc9c2';
+      const copper = wrap(t * 12, H);
+      ctx.fillRect(0, copper, W, 1);
+      ctx.globalAlpha = 1;
+      const vignette = ctx.createRadialGradient(W / 2, H / 2, 48, W / 2, H / 2, 236);
+      vignette.addColorStop(0, 'rgba(0,0,0,0)');
+      vignette.addColorStop(1, 'rgba(0,0,0,.42)');
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    function drawHint(t) {
+      const fade = state.hint > 0 ? Math.min(1, state.hint) : 0;
+      if (fade <= .01) return;
+      ctx.save();
+      ctx.globalAlpha = .74 * fade;
+      ctx.fillStyle = '#070d1b';
+      ctx.fillRect(7, 201, 206, 10);
+      ctx.fillStyle = PALETTE.cold;
+      ctx.font = '6px monospace';
+      ctx.textBaseline = 'top';
+      ctx.fillText('MOVE: WIND  •  HOLD/SPACE: SPEED  •  R: RESET', 11, 204);
+      ctx.restore();
+    }
+
+    function render(t) {
+      const storm = phaseAmount(t, 18, 22) * (1 - phaseAmount(t, 32, 36) * .78);
+      const reveal = phaseAmount(t, 27, 30.5);
+      const lightning = lightningAt(t);
+      const cameraY = state.held ? 4 : 0;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, W, H);
+      ctx.fillStyle = PALETTE.void;
+      ctx.fillRect(0, 0, W, H);
+      ctx.save();
+      if (!reducedMotion && lightning > .55) ctx.translate(Math.sin(t * 70) * lightning * 1.2, Math.cos(t * 63) * lightning * .7);
+      const skyOffset = wrap(offsetFor(SPEEDS.sky, t), W);
+      ctx.drawImage(skyLayer, -skyOffset, 0);
+      ctx.drawImage(skyLayer, W - skyOffset, 0);
+      if (lightning > 0) {
+        ctx.globalAlpha = lightning * .22;
+        ctx.fillStyle = '#91c6bf';
+        ctx.fillRect(0, 0, W, H);
+        ctx.globalAlpha = 1;
+      }
+      drawDistant(t);
+      drawCity(t);
+      drawInterchange(t, reveal);
+      drawTrain(t, cameraY);
+      drawTraffic(t, cameraY);
+      drawForeground(t, cameraY);
+      drawRain(t, storm, cameraY);
+      drawLightning(t, lightning, reveal);
+      ctx.restore();
+      drawScanlines(t);
+      drawHint(t);
+    }
+
+    function frame(now) {
+      if (state.paused) { state.last = now; requestAnimationFrame(frame); return; }
+      let dt = (now - state.last) / 1000;
+      state.last = now;
+      dt = clamp(dt, 0, .05);
+      const motion = reducedMotion ? .34 : 1;
+      state.elapsed = (state.elapsed + dt * motion * speedMul()) % LOOP;
+      state.hint = Math.max(0, state.hint - dt * .09);
+      render(state.elapsed);
+      requestAnimationFrame(frame);
+    }
+
+    render(0);
+    canvas.focus({ preventScroll: true });
+    requestAnimationFrame(frame);
+  })();
+  </script>
+</body>
+</html>
