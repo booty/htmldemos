@@ -57,6 +57,7 @@
     const motionFactor = reducedMotion ? 0.28 : 1;
     const state = {
       elapsed: 0,
+      worldTime: 0,
       seat: 0.5,
       shade: 0.18,
       condensation: 0.72,
@@ -151,8 +152,6 @@
       FORE_SCHEDULE.push({
         type,
         x: Math.floor(rng() * 720) - 120,
-        at: rng() * 60,
-        life: 4.3 + rng() * 10,
         speed: type === 'column' ? 2.2 : type === 'pole' ? 1.65 : type === 'grass' ? 0.85 : 1.15,
         size: 0.65 + rng() * 0.8,
         seed: rng()
@@ -492,12 +491,13 @@
     }
     function drawForeground(t, p) {
       for (const obj of FORE_SCHEDULE) {
-        const age = mod(t - obj.at, 60);
-        if (age > obj.life) continue;
-        const entry = smooth(clamp(age / obj.life, 0, 1));
-        const x = mod(obj.x - age * obj.speed * 28 * motionFactor + (state.seat - .5) * 23, 720) - 120;
-        ctx.globalAlpha = .46 + entry * .54;
-        drawForegroundObject(obj, Math.floor(x), p, t);
+        const x = mod(obj.x - state.worldTime * obj.speed * 28 * motionFactor + (state.seat - .5) * 23, 720) - 120;
+        for (let copy = -1; copy <= 1; copy += 1) {
+          const drawX = Math.floor(x + copy * 720);
+          if (drawX > W + 48 || drawX + 48 < -8) continue;
+          ctx.globalAlpha = .84;
+          drawForegroundObject(obj, drawX, p, t);
+        }
       }
       ctx.globalAlpha = 1;
     }
@@ -732,7 +732,7 @@
       const key = event.key.toLowerCase();
       if (event.code === 'Space') { event.preventDefault(); clearCondensation(); return; }
       if (key === 'r') {
-        event.preventDefault(); state.elapsed = 0; state.shade = .18; state.seat = .5; state.condensation = .72; state.paletteMode = null; markInput(); return;
+        event.preventDefault(); state.elapsed = 0; state.worldTime = 0; state.shade = .18; state.seat = .5; state.condensation = .72; state.paletteMode = null; markInput(); return;
       }
       if (key === 'q') { state.qualityHigh = !state.qualityHigh; state.autoLow = false; markInput(); return; }
       if (key === 'p') { state.paletteMode = state.paletteMode === null ? 0 : (state.paletteMode + 1) % 3; markInput(); return; }
@@ -757,6 +757,7 @@
       lastFrame = now;
       if (delta > .038) state.frameSlow += delta; else state.frameSlow = Math.max(0, state.frameSlow - delta * .5);
       if (state.frameSlow > 2 && state.qualityHigh && !state.autoLow) state.autoLow = true;
+      state.worldTime += delta;
       state.elapsed = mod(state.elapsed + delta, 60);
       state.condensation = Math.min(1, state.condensation + delta * .035);
       draw(state.elapsed);
