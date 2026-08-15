@@ -6,13 +6,18 @@ This repository is a collection of impressive, self-contained graphics demos. Th
 
 The creative north star is the demoscene: Amiga-era visuals, 16-bit games, CRTs, raster effects, procedural textures, chunky pixels, unusual palettes, particles, sprites, and sound. Use those references as inspiration for original work; do not copy proprietary game assets, logos, music, or code without permission.
 
-## Best practices / goals
+## What Kind of Demos We're Making
+
+Use ./INSPIRATION.md for examples and inspiration
+
+## Best Practices / Goals
 
 - Performance target is an M1 MAX laptop
 - Don't use the "Superpowers" plugin/skill unless explicitly asked to do so, especially on small tasks.
 - Impress me with graphics
+- For now, it's okay to work directly on git branch `main` since this is a solo toy/learning repo
 
-## Repository shape
+## Repository Shape
 
 - Each demo lives in its own top-level folder.
 - Each demo folder is a nearly independent project with its own entry point, assets, dependencies, instructions, and local `AGENTS.md`.
@@ -21,7 +26,7 @@ The creative north star is the demoscene: Amiga-era visuals, 16-bit games, CRTs,
 - Do not create a shared `vendor/`, `assets/`, or runtime library directory for all demos. If a library is needed, vendor it inside the demo that uses it.
 - Existing non-HTML projects keep their own toolchain and local conventions until they are intentionally migrated. The browser-specific rules below apply to HTML graphics demos.
 
-## HTML demo contract
+## HTML Demo Contract
 
 Every new browser demo should meet these expectations:
 
