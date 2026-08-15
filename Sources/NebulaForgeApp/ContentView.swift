@@ -8,10 +8,42 @@ struct ContentView: View {
             MetalView(model: model)
                 .ignoresSafeArea()
 
+            if model.panelVisible {
+                VStack {
+                    HStack {
+                        Spacer()
+                        ControlPanel(model: model)
+                    }
+                    Spacer()
+                }
+                .padding(16)
+                .transition(.move(edge: .trailing).combined(with: .opacity))
+            } else {
+                VStack {
+                    HStack {
+                        Spacer()
+                        Button {
+                            withAnimation(.snappy) {
+                                model.panelVisible = true
+                            }
+                        } label: {
+                            Label("Controls", systemImage: "sidebar.left")
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .keyboardShortcut("c", modifiers: [.command, .shift])
+                        .help("Show controls (⇧⌘C)")
+                        .accessibilityIdentifier("show-controls")
+                    }
+                    Spacer()
+                }
+                .padding(16)
+            }
+
             if let rendererError = model.rendererError {
                 errorCard(rendererError)
             }
         }
+        .animation(.snappy, value: model.panelVisible)
         .background(Color(red: 0.01, green: 0.005, blue: 0.04))
     }
 

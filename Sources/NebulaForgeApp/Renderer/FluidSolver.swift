@@ -84,6 +84,43 @@ final class FluidSolver {
         try allocateTextures(axis: gridAxis)
     }
 
+    func encodeReset(
+        commandBuffer: MTLCommandBuffer,
+        uniforms: GPUUniforms
+    ) throws -> FluidStepState {
+        var uniforms = uniforms
+        let axis = UInt32(gridAxis)
+        uniforms.gridSize = SIMD4(axis, axis, axis, 0)
+
+        try encodeClear(
+            commandBuffer: commandBuffer,
+            velocity: velocityTextures[0],
+            scalar: divergenceTexture,
+            uniforms: uniforms
+        )
+        try encodeClear(
+            commandBuffer: commandBuffer,
+            velocity: velocityTextures[1],
+            scalar: divergenceTexture,
+            uniforms: uniforms
+        )
+        try encodeScalarClear(
+            commandBuffer: commandBuffer,
+            scalar: pressureTextures[0],
+            uniforms: uniforms
+        )
+        try encodeScalarClear(
+            commandBuffer: commandBuffer,
+            scalar: pressureTextures[1],
+            uniforms: uniforms
+        )
+        return FluidStepState(
+            velocityIndex: 0,
+            pressureIndex: 0,
+            needsClear: false
+        )
+    }
+
     func encodeStep(
         commandBuffer: MTLCommandBuffer,
         uniforms: GPUUniforms,

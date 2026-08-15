@@ -9,6 +9,7 @@ final class ParticleSystem {
     let currentBuffer: MTLBuffer
 
     private let capacity: Int
+    private let initializeParticlesPipeline: MTLComputePipelineState
     private let updateParticlesPipeline: MTLComputePipelineState
     private let updateEncoderFactory: ParticleEncoderFactory
 
@@ -21,7 +22,7 @@ final class ParticleSystem {
         self.updateEncoderFactory = updateEncoderFactory ?? { commandBuffer in
             commandBuffer.makeComputeCommandEncoder()
         }
-        let initializeParticlesPipeline = try Self.pipeline(
+        initializeParticlesPipeline = try Self.pipeline(
             named: "initializeParticles",
             context: context
         )
@@ -37,29 +38,38 @@ final class ParticleSystem {
         particleBuffer.label = "Tracer Particles"
         currentBuffer = particleBuffer
 
-        var initialization = SIMD4<UInt32>(0x4e_46_47_31, UInt32(capacity), 0, 0)
-        guard let initializationBuffer = context.device.makeBuffer(
-            bytes: &initialization,
-            length: MemoryLayout<SIMD4<UInt32>>.stride,
-            options: .storageModeShared
-        ) else {
-            throw RendererError.pipeline("particle initialization staging buffer")
-        }
-        initializationBuffer.label = "Particle Initialization Metadata"
-
-        guard
-            let commandBuffer = context.queue.makeCommandBuffer(),
-            let encoder = commandBuffer.makeComputeCommandEncoder()
-        else {
+        guard let commandBuffer = context.queue.makeCommandBuffer() else {
             throw RendererError.commandEncoding("particle initialization")
         }
         commandBuffer.label = "Initialize Tracer Particles"
+        try encodeReset(commandBuffer: commandBuffer, parameters: initialParameters)
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+        guard commandBuffer.status == .completed else {
+            throw RendererError.commandEncoding(
+                "particle initialization: \(commandBuffer.error?.localizedDescription ?? "unknown error")"
+            )
+        }
+    }
+
+    func encodeReset(
+        commandBuffer: MTLCommandBuffer,
+        parameters: SimulationParameters
+    ) throws {
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw RendererError.commandEncoding("particle reset")
+        }
         encoder.label = "Initialize Tracer Particles"
         encoder.setComputePipelineState(initializeParticlesPipeline)
-        encoder.setBuffer(particleBuffer, offset: 0, index: 0)
-        encoder.setBuffer(initializationBuffer, offset: 0, index: 1)
+        encoder.setBuffer(currentBuffer, offset: 0, index: 0)
+        var initialization = SIMD4<UInt32>(0x4e_46_47_31, UInt32(capacity), 0, 0)
+        encoder.setBytes(
+            &initialization,
+            length: MemoryLayout<SIMD4<UInt32>>.stride,
+            index: 1
+        )
         var initialUniforms = GPUUniforms(
-            parameters: initialParameters,
+            parameters: parameters,
             schedule: StepSchedule(stepCount: 1, stepDelta: 1.0 / 60.0),
             elapsedTime: 0,
             frameIndex: 0,
@@ -76,13 +86,6 @@ final class ParticleSystem {
             pipeline: initializeParticlesPipeline
         )
         encoder.endEncoding()
-        commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-        guard commandBuffer.status == .completed else {
-            throw RendererError.commandEncoding(
-                "particle initialization: \(commandBuffer.error?.localizedDescription ?? "unknown error")"
-            )
-        }
     }
 
     func encodeUpdate(

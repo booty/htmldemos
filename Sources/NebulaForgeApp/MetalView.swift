@@ -1,4 +1,5 @@
 import MetalKit
+import NebulaForgeCore
 import SwiftUI
 
 struct MetalView: NSViewRepresentable {
@@ -17,6 +18,7 @@ struct MetalView: NSViewRepresentable {
                 colorPixelFormat: view.colorPixelFormat
             )
             context.coordinator.renderer = renderer
+            context.coordinator.updateCameraParameters(model.parameters)
             view.interactionDelegate = context.coordinator
             model.renderer = renderer
             model.rendererError = nil
@@ -35,7 +37,10 @@ struct MetalView: NSViewRepresentable {
         }
     }
 
-    func updateNSView(_ view: MTKView, context: Context) {}
+    func updateNSView(_ view: MTKView, context: Context) {
+        view.preferredFramesPerSecond = model.parameters.targetFrameRate.rawValue
+        context.coordinator.updateCameraParameters(model.parameters)
+    }
 
     static func dismantleNSView(_ view: MTKView, coordinator: Coordinator) {
         view.delegate = nil
@@ -103,6 +108,11 @@ struct MetalView: NSViewRepresentable {
 
         fileprivate func clearInteractionForce() {
             renderer?.updateInteractionForce(nil)
+        }
+
+        fileprivate func updateCameraParameters(_ parameters: SimulationParameters) {
+            camera.fieldOfView = parameters.fieldOfViewDegrees * .pi / 180
+            renderer?.updateCamera(camera)
         }
 
         private func applyRoute(
